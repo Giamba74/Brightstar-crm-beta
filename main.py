@@ -62,7 +62,6 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 
 # --- AGENTI INTELLIGENTI ---
 def agente_strategico(note_precedenti):
-    """Analizza lo storico e dà consigli comportamentali"""
     if not note_precedenti: 
         return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "border-left-color: #64748b;"
     
@@ -93,7 +92,6 @@ def agente_meteo_territoriale():
             temp_media = sum(z['hourly']['temperature_2m'][9:18]) / 9
             details.append(f"{nome}: {int(temp_media)}°C/Pioggia {rain_prob}%")
             
-            # LOGICA CALIBRATA: Auto solo se Temp < 3 o Pioggia > 25%
             if rain_prob > 25 or temp_media < 3:
                 needs_auto = True
             
@@ -240,7 +238,6 @@ if ws:
                     for p in pool:
                         if 'g_data' not in p:
                             p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                            # FIX ERROR COPY-PASTE (Riga Spezzata per sicurezza)
                             if not p['g_data']: 
                                 p['g_data'] = {'coords': None, 'found': False, 'periods': []}
                         
@@ -255,9 +252,9 @@ if ws:
                         score = dist_air
                         
                         # --- Punteggi Priorità ---
-                        if p[c_nom] in sel_forced: score -= 100000 # Priorità Assoluta
-                        if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5 # Priorità Attività
-                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip(): score -= 3 # Priorità Canvass
+                        if p[c_nom] in sel_forced: score -= 100000 
+                        if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5 
+                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip(): score -= 3 
                             
                         if score < best_score:
                             best_score = score
@@ -303,19 +300,18 @@ if ws:
             
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
 
-            # --- BOX CANVASS VERDE (SOPRA) ---
+            # --- BOX CANVASS VERDE (CORRETTO SENZA SPAZI) ---
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
             if valore_canvass and str(valore_canvass).strip():
+                # NOTA: Qui sotto NON ci sono spazi all'inizio della riga per evitare errori HTML
                 canvass_html = f"""
-                <div style="background: linear-gradient(90deg, #059669, #10b981); 
-                            color: white; padding: 10px; border-radius: 8px; 
-                            margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
-                    📢 CANVASS ATTIVO: {valore_canvass}
-                </div>
-                """
+<div style="background: linear-gradient(90deg, #059669, #10b981); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
+📢 CANVASS ATTIVO: {valore_canvass}
+</div>
+"""
 
-            # --- CARD HTML (Schiacciato a sinistra) ---
+            # --- CARD HTML (CORRETTO SENZA SPAZI) ---
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
