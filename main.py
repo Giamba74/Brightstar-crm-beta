@@ -58,7 +58,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
 # --- AGENTI INTELLIGENTI ---
@@ -394,3 +394,4 @@ if ws:
                 st.code("\n".join(report_lines))
             else:
                 st.warning("Nessuna attività o nota registrata.")
+
