@@ -47,7 +47,6 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 
 # --- GESTIONE MEMORIA PERSISTENTE ---
 def salva_giro_su_foglio(sh_memoria, rotta_data):
-    """Salva la rotta attuale sul foglio MEMORIA_GIRO usando una copia sicura."""
     try:
         dati_export = copy.deepcopy(rotta_data)
         now_str = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
@@ -171,10 +170,28 @@ ws, ws_ai, ws_mem = connect_db()
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
-    c_nom, c_ind, c_com, c_cap, c_vis, c_tel = [next(c for c in df.columns if x in c) for x in ["CLIENTE", "INDIRIZZO", "COMUNE", "CAP", "VISITATO", "TELEFONO"]]
+    
+    # 1. RILEVAMENTO COLONNE (MIGLIORATO)
+    c_nom = next(c for c in df.columns if "CLIENTE" in c)
+    c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
+    c_com = next(c for c in df.columns if "COMUNE" in c)
+    c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
+    c_vis = next(c for c in df.columns if "VISITATO" in c)
+    
+    # FIX: Cerca "TELEFONO" esatto per primo, poi cerca colonne che contengono "TEL" o "CELL"
+    if "TELEFONO" in df.columns:
+        c_tel = "TELEFONO"
+    else:
+        c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
+    
+    # Pulizia Dati Telefono (Forza Stringa)
+    if c_tel in df.columns:
+        df[c_tel] = df[c_tel].astype(str).replace('nan', '').replace('None', '')
+
     c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
     c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
+    
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
     # --- AUTO-LOADING MEMORIA ---
@@ -256,7 +273,13 @@ if ws:
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
-            tel, ora_str = p['g_data'].get('tel', ''), p['arr'].strftime('%H:%M')
+            # FIX TELEFONO: Priorità a Excel, poi Google.
+            tel_excel = str(p.get(c_tel, '')).strip()
+            tel_google = p['g_data'].get('tel', '')
+            tel_display = tel_excel if tel_excel and len(tel_excel) > 5 else tel_google
+
+            ora_str = p['arr'].strftime('%H:%M')
+            
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
@@ -290,17 +313,15 @@ if ws:
 </div>
 <div class="info-row">
 <span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
-<span class="highlight">{tel}</span>
+<span class="highlight">{tel_display}</span>
 </div>
 </div>
 """
             st.markdown(html_card, unsafe_allow_html=True)
 
             # --- ESPANSIONE: SOSTITUZIONE + DATI ---
-            # QUI è dove avviene la magia. Il nome è cambiato per essere evidente.
             with st.expander("🔄 SOSTITUISCI / DATI CRM"):
                 
-                # 1. SEZIONE SOSTITUZIONE (Messa per prima!)
                 st.markdown("🔄 **Sostituisci questo cliente:**")
                 clienti_nel_giro = [x[c_nom] for x in route]
                 candidati_sostituzione = [c for c in all_clients_list if c not in clienti_nel_giro]
@@ -325,8 +346,6 @@ if ws:
                                 st.error("Indirizzo sostituto non trovato.")
                 
                 st.divider()
-                
-                # 2. DATI CRM
                 st.markdown("**📂 Anagrafica Completa:**")
                 dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
                 st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
@@ -349,7 +368,12 @@ if ws:
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
             with c2: 
-                if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
+                # FIX BUTTON VISIBILITY
+                if tel_display: 
+                    st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
+                else:
+                    st.button("🚫 NO TEL", disabled=True, use_container_width=True)
+
             with c3:
                 colore_btn = "primary" if len(tasks_done) == tasks_total else "secondary"
                 label_btn = "✅ FATTO" if len(tasks_done) == tasks_total else "⚠️ CHIUDI COMUNQUE"
