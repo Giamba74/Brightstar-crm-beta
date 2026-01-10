@@ -9,7 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pytz
 import json
-import copy  # <--- NUOVA IMPORTAZIONE FONDAMENTALE
+import copy
 
 # --- 1. CONFIGURAZIONE & DESIGN ---
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💼", layout="wide")
@@ -45,29 +45,24 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA PERSISTENTE (FIXED) ---
+# --- GESTIONE MEMORIA PERSISTENTE ---
 def salva_giro_su_foglio(sh_memoria, rotta_data):
-    """Salva la rotta attuale sul foglio MEMORIA_GIRO usando una copia."""
+    """Salva la rotta attuale sul foglio MEMORIA_GIRO usando una copia sicura."""
     try:
-        # USARE DEEPCOPY PER NON ROMPERE L'APP LIVE
         dati_export = copy.deepcopy(rotta_data)
         now_str = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
-        
-        # Convertiamo date in stringhe SOLO NELLA COPIA
         for p in dati_export:
             if isinstance(p.get('arr'), datetime): 
                 p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
-            # Pulizia oggetti non serializzabili (se ce ne fossero altri)
         
         json_dump = json.dumps(dati_export)
         sh_memoria.clear()
         sh_memoria.append_row(["DATA", "JSON_DATA"])
         sh_memoria.append_row([now_str, json_dump])
     except Exception as e:
-        print(f"Errore Salvataggio Memoria: {e}") # Log silenzioso
+        print(f"Errore Salvataggio Memoria: {e}")
 
 def carica_giro_da_foglio(sh_memoria):
-    """Carica il giro salvato se è della data di oggi."""
     try:
         data = sh_memoria.get_all_values()
         if len(data) > 1:
@@ -75,7 +70,6 @@ def carica_giro_da_foglio(sh_memoria):
             today = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
             if saved_date == today:
                 rotta = json.loads(data[1][1])
-                # Riconvertiamo le stringhe in datetime
                 for p in rotta:
                     if p.get('arr'): 
                         p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
@@ -201,7 +195,7 @@ if ws:
         sel_forced = st.multiselect("Clienti Prioritari:", all_clients_list)
         
         st.divider()
-        if st.button("🗑️ RESETTA MEMORIA GIRO", type="secondary"):
+        if st.button("🗑️ RESETTA MEMORIA", type="secondary"):
              if ws_mem: ws_mem.clear(); ws_mem.append_row(["DATA", "JSON_DATA"])
              if 'master_route' in st.session_state: del st.session_state.master_route
              st.rerun()
@@ -258,14 +252,11 @@ if ws:
     # --- VISUALIZZAZIONE GIRO ---
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
-        end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
-        st.caption(f"🏁 Rientro previsto: {end_time}")
+        st.caption(f"🏁 Rientro previsto: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
-            tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
-            ora_str = p['arr'].strftime('%H:%M')
-            
+            tel, ora_str = p['g_data'].get('tel', ''), p['arr'].strftime('%H:%M')
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
@@ -275,7 +266,7 @@ if ws:
             if valore_canvass and str(valore_canvass).strip():
                 canvass_html = f"""
 <div style="background: linear-gradient(90deg, #059669, #10b981); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
-📢 CANVASS ATTIVO: {valore_canvass}
+📢 CANVASS: {valore_canvass}
 </div>
 """
 
@@ -305,19 +296,18 @@ if ws:
 """
             st.markdown(html_card, unsafe_allow_html=True)
 
-            # --- ESPANSIONE: DATI + SOSTITUZIONE ---
-            with st.expander("📂 Dati, Attività & Opzioni"):
-                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
-                st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
+            # --- ESPANSIONE: SOSTITUZIONE + DATI ---
+            # QUI è dove avviene la magia. Il nome è cambiato per essere evidente.
+            with st.expander("🔄 SOSTITUISCI / DATI CRM"):
                 
-                st.markdown("---")
+                # 1. SEZIONE SOSTITUZIONE (Messa per prima!)
                 st.markdown("🔄 **Sostituisci questo cliente:**")
                 clienti_nel_giro = [x[c_nom] for x in route]
                 candidati_sostituzione = [c for c in all_clients_list if c not in clienti_nel_giro]
                 
                 col_swap_1, col_swap_2 = st.columns([3, 1])
                 with col_swap_1:
-                    nuovo_cliente_nome = st.selectbox(f"Scegli sostituto per {p[c_nom]}:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
+                    nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
                 with col_swap_2:
                     if st.button("SCAMBIA", key=f"btn_swap_{i}"):
                         if nuovo_cliente_nome != "- Seleziona -":
@@ -332,7 +322,14 @@ if ws:
                                 if ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
                                 st.rerun()
                             else:
-                                st.error("Impossibile trovare indirizzo sostituto.")
+                                st.error("Indirizzo sostituto non trovato.")
+                
+                st.divider()
+                
+                # 2. DATI CRM
+                st.markdown("**📂 Anagrafica Completa:**")
+                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
+                st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
 
             # --- CHECKLIST ATTIVITÀ ---
             tasks_done = []
