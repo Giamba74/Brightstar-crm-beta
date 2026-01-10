@@ -9,6 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pytz
 import json
+import copy  # <--- NUOVA IMPORTAZIONE FONDAMENTALE
 
 # --- 1. CONFIGURAZIONE & DESIGN ---
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💼", layout="wide")
@@ -30,8 +31,6 @@ st.markdown("""
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
-    
-    /* Swap Button Style */
     .swap-btn { border: 1px solid #475569; color: #94a3b8; border-radius: 5px; padding: 2px 8px; font-size: 0.8em; text-decoration: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -46,23 +45,26 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA PERSISTENTE ---
+# --- GESTIONE MEMORIA PERSISTENTE (FIXED) ---
 def salva_giro_su_foglio(sh_memoria, rotta_data):
-    """Salva la rotta attuale sul foglio MEMORIA_GIRO per non perderla se chiudi l'app."""
+    """Salva la rotta attuale sul foglio MEMORIA_GIRO usando una copia."""
     try:
+        # USARE DEEPCOPY PER NON ROMPERE L'APP LIVE
+        dati_export = copy.deepcopy(rotta_data)
         now_str = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
-        # Convertiamo date in stringhe per JSON
-        for p in rotta_data:
-            if isinstance(p.get('arr'), datetime): p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
-            # Rimuoviamo oggetti complessi non serializzabili
         
-        json_dump = json.dumps(rotta_data)
-        # Cancella tutto e scrivi nuovo
+        # Convertiamo date in stringhe SOLO NELLA COPIA
+        for p in dati_export:
+            if isinstance(p.get('arr'), datetime): 
+                p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
+            # Pulizia oggetti non serializzabili (se ce ne fossero altri)
+        
+        json_dump = json.dumps(dati_export)
         sh_memoria.clear()
         sh_memoria.append_row(["DATA", "JSON_DATA"])
         sh_memoria.append_row([now_str, json_dump])
     except Exception as e:
-        st.error(f"Errore Salvataggio Memoria: {e}")
+        print(f"Errore Salvataggio Memoria: {e}") # Log silenzioso
 
 def carica_giro_da_foglio(sh_memoria):
     """Carica il giro salvato se è della data di oggi."""
@@ -75,7 +77,8 @@ def carica_giro_da_foglio(sh_memoria):
                 rotta = json.loads(data[1][1])
                 # Riconvertiamo le stringhe in datetime
                 for p in rotta:
-                    if p.get('arr'): p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                    if p.get('arr'): 
+                        p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
                 return rotta
     except: pass
     return None
@@ -146,7 +149,6 @@ def connect_db():
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
         client = gspread.authorize(creds)
         sh = client.open_by_key(ID_DEL_FOGLIO)
-        # Recupera fogli specifici
         ws_main = sh.get_worksheet(0)
         ws_log = sh.worksheet("LOG_AI") if "LOG_AI" in [w.title for w in sh.worksheets()] else None
         ws_mem = sh.worksheet("MEMORIA_GIRO") if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()] else None
@@ -256,11 +258,14 @@ if ws:
     # --- VISUALIZZAZIONE GIRO ---
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
-        st.caption(f"🏁 Rientro previsto: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
+        end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
+        st.caption(f"🏁 Rientro previsto: {end_time}")
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
-            tel, ora_str = p['g_data'].get('tel', ''), p['arr'].strftime('%H:%M')
+            tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
+            ora_str = p['arr'].strftime('%H:%M')
+            
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
@@ -268,7 +273,11 @@ if ws:
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
             if valore_canvass and str(valore_canvass).strip():
-                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
+                canvass_html = f"""
+<div style="background: linear-gradient(90deg, #059669, #10b981); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
+📢 CANVASS ATTIVO: {valore_canvass}
+</div>
+"""
 
             # --- CARD HTML ---
             html_card = f"""
@@ -301,10 +310,8 @@ if ws:
                 dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
                 st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
                 
-                # SEZIONE SOSTITUZIONE CLIENTE
                 st.markdown("---")
                 st.markdown("🔄 **Sostituisci questo cliente:**")
-                # Lista per sostituzione: Tutti i clienti MENO quelli già nel giro
                 clienti_nel_giro = [x[c_nom] for x in route]
                 candidati_sostituzione = [c for c in all_clients_list if c not in clienti_nel_giro]
                 
@@ -314,17 +321,13 @@ if ws:
                 with col_swap_2:
                     if st.button("SCAMBIA", key=f"btn_swap_{i}"):
                         if nuovo_cliente_nome != "- Seleziona -":
-                            # Trova i dati del nuovo cliente nel DF originale
                             dati_nuovo = df[df[c_nom] == nuovo_cliente_nome].to_dict('records')[0]
-                            # Recupera GPS
                             g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
                             if g_data_nuovo and g_data_nuovo['found']:
                                 dati_nuovo['g_data'] = g_data_nuovo
-                                # Mantieni orari dello slot attuale ma aggiorna i dati
                                 dati_nuovo['arr'] = p['arr'] 
-                                dati_nuovo['duration'] = p['duration'] # O ricalcola con AI
-                                dati_nuovo['travel_time'] = p['travel_time'] # Approssimato per velocità
-                                # Sostituisci nella lista
+                                dati_nuovo['duration'] = p['duration']
+                                dati_nuovo['travel_time'] = p['travel_time']
                                 st.session_state.master_route[i] = dati_nuovo
                                 if ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
                                 st.rerun()
@@ -340,10 +343,8 @@ if ws:
                 if task_list:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
-                        # Stato persistente checkbox
-                        chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}" # Chiave unica col nome cliente
-                        is_checked = st.checkbox(task, key=chk_key)
-                        if is_checked: tasks_done.append(task)
+                        chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
+                        if st.checkbox(task, key=chk_key): tasks_done.append(task)
             
             p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
@@ -353,27 +354,18 @@ if ws:
             with c2: 
                 if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
             with c3:
-                # LOGICA "NON ELIMINARE SE NON FINITO"
                 colore_btn = "primary" if len(tasks_done) == tasks_total else "secondary"
                 label_btn = "✅ FATTO" if len(tasks_done) == tasks_total else "⚠️ CHIUDI COMUNQUE"
                 
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
-                    # Se ci sono attività non fatte, avvisa ma permetti (o blocca se preferisci)
                     if tasks_total > 0 and len(tasks_done) < tasks_total:
                         st.toast("⚠️ Attenzione: Attività non completate!", icon="check")
-                        # Qui potresti mettere un 'return' se volessi BLOCCARE l'azione.
-                        # Per ora permettiamo di chiudere comunque ma con avviso.
                     
                     try:
-                        # Aggiorna Sheet
                         ws.update_cell(ws.find(p[c_nom]).row, list(df.columns).index(c_vis)+1, "SI")
-                        # Log
                         report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)} su {tasks_total}] " if tasks_total > 0 else "") + (f"[NOTE: {p['NOTE_SESSION']}]" if p['NOTE_SESSION'] else "")
                         log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
-                        
-                        # Rimuovi da rotta locale
                         st.session_state.master_route.pop(i)
-                        # Aggiorna memoria persistente
                         if ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
                         st.rerun()
                     except: st.error("Errore Salvataggio")
