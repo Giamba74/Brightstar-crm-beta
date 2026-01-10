@@ -43,10 +43,7 @@ st.markdown("""
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
 
-    /* Checkbox Style Override */
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
-    
-    /* Expander Style */
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
@@ -63,10 +60,8 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 
 # --- AGENTI INTELLIGENTI ---
 def agente_strategico(note_precedenti):
-    """Analizza lo storico e dà consigli comportamentali"""
     if not note_precedenti: 
         return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "border-left-color: #64748b;"
-    
     txt = str(note_precedenti).lower()
     if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo', 'problema', 'rotto']):
         return "🛡️ COACH: Cliente a rischio. Empatia massima.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
@@ -74,7 +69,6 @@ def agente_strategico(note_precedenti):
         return "💎 COACH: Difendi il valore. Non svendere.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
     if any(x in txt for x in ['interessato', 'preventivo', 'forse']):
         return "🎯 COACH: È caldo! Oggi devi chiudere.", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
-    
     return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #94a3b8;"
 
 def agente_meteo_territoriale():
@@ -83,7 +77,6 @@ def agente_meteo_territoriale():
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lats}&longitude={lons}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
         res = requests.get(url).json()
         res = res if isinstance(res, list) else [res]
-        
         bad_weather = False
         details = []
         for i, z in enumerate(res):
@@ -92,7 +85,6 @@ def agente_meteo_territoriale():
             temp = sum(z['hourly']['temperature_2m'][9:18]) / 9
             details.append(f"{nome}: {int(temp)}°C/Pioggia {rain}%")
             if rain > 30 or temp < 8: bad_weather = True
-            
         msg = f"AUTO 🚗 (Meteo Incerto: {', '.join(details)})" if bad_weather else "ZONTES 350 🛵 (Via Libera!)"
         style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if bad_weather else "background: linear-gradient(90deg, #15803d, #22c55e);"
         return msg, style
@@ -163,17 +155,14 @@ ws, ws_ai = connect_db()
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
-    
-    # Rilevamento Colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     c_vis = next(c for c in df.columns if "VISITATO" in c)
     c_tel = next((c for c in df.columns if "TELEFONO" in c), "TELEFONO")
-    
-    # Colonne CRM
-    c_att = next((c for c in df.columns if "ATTIVIT" in c), None) # Cerca colonna ATTIVITA
+    c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
+    c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
     
     if c_cap in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
@@ -182,26 +171,20 @@ if ws:
         st.title("💼 CRM Filters")
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
-        
         st.divider()
         st.markdown("### ⭐ Forzature (VIP)")
         all_clients = sorted(df[c_nom].unique().tolist())
         sel_forced = st.multiselect("Clienti Prioritari:", all_clients)
 
     st.markdown("### 🚀 Brightstar CRM Dashboard")
-    
     msg, style = agente_meteo_territoriale()
     st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
 
     if st.button("CALCOLA GIRO (ORARIO ITALIA)", type="primary", use_container_width=True):
-        # 1. Filtro Standard
         mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
         if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
-        
-        # 2. Filtro Forzati
         mask_forced = df[c_nom].isin(sel_forced)
-        
         df_final = pd.concat([df[mask_forced], df[mask_standard]]).drop_duplicates(subset=[c_nom])
         raw = df_final.to_dict('records')
         
@@ -210,64 +193,36 @@ if ws:
             with st.spinner("⏳ Elaborazione Strategia CRM..."):
                 rotta = []
                 now = datetime.now(TZ_ITALY)
-                if now.hour >= 19 or now.hour < 6:
-                    start_t = now.replace(hour=7, minute=30, second=0)
-                    if now.hour >= 19: start_t += timedelta(days=1)
-                else: start_t = now
-                    
+                start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
                 limit = start_t.replace(hour=19, minute=30)
-                curr_t = start_t
-                curr_loc = SEDE_COORDS
-                pool = raw.copy()
+                curr_t, curr_loc, pool = start_t, SEDE_COORDS, raw.copy()
 
                 while pool and curr_t < limit:
                     best = None
                     best_score = float('inf')
-                    
                     for p in pool:
                         if 'g_data' not in p:
-                            p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                            if not p['g_data']: p['g_data'] = {'coords': None, 'found': False, 'periods': []}
+                            p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"]) or {'coords': None, 'found': False, 'periods': []}
                         if not p['g_data']['found']: continue
-
                         dist_air = geodesic(curr_loc, p['g_data']['coords']).km
-                        est_min = (dist_air * 1.5 / 40) * 60 
-                        est_arr = curr_t + timedelta(minutes=est_min)
+                        est_arr = curr_t + timedelta(minutes=(dist_air*1.5/40)*60)
                         if est_arr > limit: continue
-                        
                         score = dist_air
                         if p[c_nom] in sel_forced: score -= 100000 
-                        
-                        # Priorità se ci sono ATTIVITA' da fare
-                        if c_att and p.get(c_att) and str(p[c_att]).strip():
-                            score -= 5
-                            
-                        if score < best_score:
-                            best_score = score
-                            best = p
+                        if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5
+                        if score < best_score: best_score, best = score, p
                     
                     if best:
                         real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
                         arrival_real = curr_t + timedelta(minutes=real_mins)
-                        if arrival_real > limit:
-                            pool.remove(best)
-                            continue
-
+                        if arrival_real > limit: pool.remove(best); continue
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
-                        best['arr'] = arrival_real
-                        best['travel_time'] = real_mins
-                        best['duration'] = dur_visita
-                        best['learned'] = learned
-                        rotta.append(best)
-                        curr_t = arrival_real + timedelta(minutes=dur_visita)
-                        curr_loc = best['g_data']['coords']
-                        pool.remove(best)
+                        best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
+                        rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
                     else: break
-                
                 st.session_state.master_route = rotta
                 st.rerun()
 
-    # --- RENDER DASHBOARD ---
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
         end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
@@ -277,15 +232,17 @@ if ws:
             ai_lbl = "AI" if p.get('learned') else "Std"
             tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
             ora_str = p['arr'].strftime('%H:%M')
-            
-            # Recupero Note Storiche e Attività
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
-            
-            # Badge VIP
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
 
-            # HTML Card
+            # --- BOX CANVASS VERDE SMERALDO (VISIBILE SOPRA) ---
+            canvass_html = ""
+            valore_canvass = p.get(c_canv, '') if c_canv else ''
+            if valore_canvass and str(valore_canvass).strip():
+                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS ATTIVO: {valore_canvass}</div>"
+
+            # --- CARD HTML ---
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
@@ -295,6 +252,7 @@ if ws:
 </div>
 <div class="arrival-time">{ora_str}</div>
 </div>
+{canvass_html}
 <div class="strategy-box" style="{style_coach}">
 {msg_coach}
 </div>
@@ -310,88 +268,42 @@ if ws:
 """
             st.markdown(html_card, unsafe_allow_html=True)
 
-            # --- SEZIONE CRM OPERATIVO ---
-            
-            # 1. ESPANDI DATI (Anagrafica completa)
             with st.expander("📂 Dati Completi & CRM"):
-                # Mostra tutte le colonne del foglio per questo cliente come tabella veloce
                 dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
                 st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
 
-            # 2. CHECKLIST ATTIVITÀ (DA FARE)
-            # Legge la colonna ATTIVITA (separata da virgola)
             tasks_done = []
             if c_att and p.get(c_att):
-                raw_tasks = str(p[c_att]).split(',')
-                # Rimuove spazi vuoti
-                task_list = [t.strip() for t in raw_tasks if t.strip()]
-                
+                task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
                 if task_list:
                     st.markdown("**📋 Attività da svolgere:**")
                     for t_idx, task in enumerate(task_list):
-                        # Chiave unica per ogni checkbox
-                        chk_key = f"chk_{i}_{t_idx}"
-                        if st.checkbox(task, key=chk_key):
-                            tasks_done.append(task)
+                        if st.checkbox(task, key=f"chk_{i}_{t_idx}"): tasks_done.append(task)
             
-            # 3. NOTE VOCALI
-            current_note = p.get('NOTE_SESSION', '')
-            new_note = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=current_note, key=f"note_{i}", height=70)
-            st.session_state.master_route[i]['NOTE_SESSION'] = new_note
+            p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
-            # --- AZIONI ---
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1:
-                coords = p['g_data']['coords']
-                lnk = f"https://www.google.com/maps/dir/?api=1&destination={coords[0]},{coords[1]}&travelmode=driving"
+                lnk = f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving"
                 st.link_button("🚙 NAVIGA", lnk, use_container_width=True)
             with c2:
                 if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
             with c3:
                 if st.button("✅ FATTO", key=f"d_{i}", use_container_width=True):
                     try:
-                        # LOGICA AVANZATA DI SALVATAGGIO
                         cell = ws.find(p[c_nom])
                         ws.update_cell(cell.row, list(df.columns).index(c_vis)+1, "SI")
-                        
-                        # Costruiamo stringa report
-                        report_extra = ""
-                        if tasks_done:
-                            report_extra += f"[ATTIVITÀ COMPLETATE: {', '.join(tasks_done)}] "
-                        if new_note:
-                            report_extra += f"[NOTE: {new_note}]"
-                            
-                        # Log su AI Sheet
+                        report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)}] " if tasks_done else "") + (f"[NOTE: {p['NOTE_SESSION']}]" if p['NOTE_SESSION'] else "")
                         log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
-                        
-                        st.session_state.master_route.pop(i)
-                        st.success("Visita salvata nel CRM!")
-                        st.rerun()
+                        st.session_state.master_route.pop(i); st.rerun()
                     except: st.error("Errore Salvataggio")
 
         st.divider()
         if st.button("📧 INVIA REPORT CRM", type="secondary", use_container_width=True):
             report_lines = []
-            for p in route:
-                # Controlla se ci sono checkbox attivi nella session state per questo cliente
-                tasks_fatti = []
-                if c_att and p.get(c_att):
-                    raw_t = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
-                    for t_idx, task in enumerate(raw_t):
-                        if st.session_state.get(f"chk_{route.index(p)}_{t_idx}"):
-                            tasks_fatti.append(task)
-                            
-                note = p.get('NOTE_SESSION', '')
-                
-                if note or tasks_fatti:
-                    line = f"• {p[c_nom]}:"
-                    if tasks_fatti: line += f" ✅ {', '.join(tasks_fatti)}"
-                    if note: line += f" 📝 {note}"
-                    report_lines.append(line)
-            
-            if report_lines:
-                st.success("Report Generato:")
-                st.code("\n".join(report_lines))
-            else:
-                st.warning("Nessuna attività o nota registrata.")
+            for p_rep in route:
+                note = p_rep.get('NOTE_SESSION', '')
+                if note: report_lines.append(f"• {p_rep[c_nom]}: {note}")
+            if report_lines: st.success("Report Generato:"); st.code("\n".join(report_lines))
+            else: st.warning("Nessuna nota registrata.")
 
