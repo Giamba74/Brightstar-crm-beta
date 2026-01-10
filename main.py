@@ -240,4 +240,175 @@ if ws:
                     for p in pool:
                         if 'g_data' not in p:
                             p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                            if not p['g_data']: p['g_data'] = {'coords': None, 'found': False, 'periods
+                            # FIX ERROR COPY-PASTE (Riga Spezzata per sicurezza)
+                            if not p['g_data']: 
+                                p['g_data'] = {'coords': None, 'found': False, 'periods': []}
+                        
+                        if not p['g_data']['found']: continue
+
+                        dist_air = geodesic(curr_loc, p['g_data']['coords']).km
+                        est_min = (dist_air * 1.5 / 40) * 60 
+                        est_arr = curr_t + timedelta(minutes=est_min)
+                        
+                        if est_arr > limit: continue
+                        
+                        score = dist_air
+                        
+                        # --- Punteggi Priorità ---
+                        if p[c_nom] in sel_forced: score -= 100000 # Priorità Assoluta
+                        if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5 # Priorità Attività
+                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip(): score -= 3 # Priorità Canvass
+                            
+                        if score < best_score:
+                            best_score = score
+                            best = p
+                    
+                    if best:
+                        real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
+                        arrival_real = curr_t + timedelta(minutes=real_mins)
+                        
+                        if arrival_real > limit:
+                            pool.remove(best)
+                            continue
+
+                        dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
+                        best['arr'] = arrival_real
+                        best['travel_time'] = real_mins
+                        best['duration'] = dur_visita
+                        best['learned'] = learned
+                        
+                        rotta.append(best)
+                        curr_t = arrival_real + timedelta(minutes=dur_visita)
+                        curr_loc = best['g_data']['coords']
+                        pool.remove(best)
+                    else: break
+                
+                st.session_state.master_route = rotta
+                st.rerun()
+
+    # --- RENDER DASHBOARD ---
+    if 'master_route' in st.session_state:
+        route = st.session_state.master_route
+        end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
+        st.caption(f"🏁 Rientro previsto: {end_time}")
+        
+        for i, p in enumerate(route):
+            ai_lbl = "AI" if p.get('learned') else "Std"
+            tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
+            ora_str = p['arr'].strftime('%H:%M')
+            
+            # Recupero Info
+            note_old = p.get(c_note_sto, '') if c_note_sto else ''
+            msg_coach, style_coach = agente_strategico(note_old)
+            
+            forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
+
+            # --- BOX CANVASS VERDE (SOPRA) ---
+            canvass_html = ""
+            valore_canvass = p.get(c_canv, '') if c_canv else ''
+            if valore_canvass and str(valore_canvass).strip():
+                canvass_html = f"""
+                <div style="background: linear-gradient(90deg, #059669, #10b981); 
+                            color: white; padding: 10px; border-radius: 8px; 
+                            margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
+                    📢 CANVASS ATTIVO: {valore_canvass}
+                </div>
+                """
+
+            # --- CARD HTML (Schiacciato a sinistra) ---
+            html_card = f"""
+<div class="client-card">
+<div class="card-header">
+<div style="display:flex; align-items:center;">
+{forced_html}
+<span class="client-name">{i+1}. {p[c_nom]}</span>
+</div>
+<div class="arrival-time">{ora_str}</div>
+</div>
+{canvass_html}
+<div class="strategy-box" style="{style_coach}">
+{msg_coach}
+</div>
+<div class="info-row">
+<span>📍 {p[c_ind]}, {p[c_com]}</span>
+<span class="real-traffic">🚗 Guida: {p['travel_time']} min</span>
+</div>
+<div class="info-row">
+<span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
+<span class="highlight">{tel}</span>
+</div>
+</div>
+"""
+            st.markdown(html_card, unsafe_allow_html=True)
+
+            # --- CRM ESPANDIBILE ---
+            with st.expander("📂 Dati Completi & CRM"):
+                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
+                st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
+
+            # --- CHECKLIST ATTIVITÀ ---
+            tasks_done = []
+            if c_att and p.get(c_att):
+                task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
+                if task_list:
+                    st.markdown("**📋 Attività da svolgere:**")
+                    for t_idx, task in enumerate(task_list):
+                        if st.checkbox(task, key=f"chk_{i}_{t_idx}"):
+                            tasks_done.append(task)
+            
+            # --- NOTE VOCALI ---
+            current_note = p.get('NOTE_SESSION', '')
+            new_note = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=current_note, key=f"note_{i}", height=70)
+            st.session_state.master_route[i]['NOTE_SESSION'] = new_note
+            
+            # --- PULSANTI ---
+            c1, c2, c3 = st.columns([1, 1, 1])
+            with c1:
+                coords = p['g_data']['coords']
+                lnk = f"https://www.google.com/maps/dir/?api=1&destination={coords[0]},{coords[1]}&travelmode=driving"
+                st.link_button("🚙 NAVIGA", lnk, use_container_width=True)
+            with c2:
+                if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
+            with c3:
+                if st.button("✅ FATTO", key=f"d_{i}", use_container_width=True):
+                    try:
+                        cell = ws.find(p[c_nom])
+                        ws.update_cell(cell.row, list(df.columns).index(c_vis)+1, "SI")
+                        
+                        # Report Extra per il LOG
+                        report_extra = ""
+                        if tasks_done: report_extra += f"[ATTIVITÀ: {', '.join(tasks_done)}] "
+                        if new_note: report_extra += f"[NOTE: {new_note}]"
+                            
+                        log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
+                        
+                        st.session_state.master_route.pop(i)
+                        st.rerun()
+                    except: st.error("Errore Salvataggio")
+
+        st.divider()
+        if st.button("📧 INVIA REPORT CRM", type="secondary", use_container_width=True):
+            report_lines = []
+            for p_rep in route:
+                # Recupera task fatti (dallo stato)
+                tasks_fatti = []
+                if c_att and p_rep.get(c_att):
+                    raw_t = [t.strip() for t in str(p_rep[c_att]).split(',') if t.strip()]
+                    idx_p = route.index(p_rep)
+                    for t_idx, task in enumerate(raw_t):
+                        if st.session_state.get(f"chk_{idx_p}_{t_idx}"):
+                            tasks_fatti.append(task)
+                            
+                note = p_rep.get('NOTE_SESSION', '')
+                
+                if note or tasks_fatti:
+                    line = f"• {p_rep[c_nom]}:"
+                    if tasks_fatti: line += f" ✅ {', '.join(tasks_fatti)}"
+                    if note: line += f" 📝 {note}"
+                    report_lines.append(line)
+            
+            if report_lines:
+                st.success("Report Generato:")
+                st.code("\n".join(report_lines))
+            else:
+                st.warning("Nessuna nota registrata.")
