@@ -76,7 +76,6 @@ def carica_giro_da_foglio(sh_memoria):
                 for p in rotta:
                     if p.get('arr'): 
                         p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
-                    # Assicuriamoci che tasks_completed sia una lista
                     if 'tasks_completed' not in p:
                         p['tasks_completed'] = []
                 return rotta
@@ -96,7 +95,6 @@ def agente_strategico(note_precedenti):
     return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #94a3b8;"
 
 def agente_meteo_territoriale():
-    # Per il calcolo "Auto vs Moto" usiamo OpenMeteo (dati numerici precisi)
     try:
         lats, lons = f"{COORDS['Chianti'][0]},{COORDS['Firenze'][0]},{COORDS['Arezzo'][0]}", f"{COORDS['Chianti'][1]},{COORDS['Firenze'][1]},{COORDS['Arezzo'][1]}"
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lats}&longitude={lons}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
@@ -111,7 +109,6 @@ def agente_meteo_territoriale():
             details.append(f"{nome}: {int(temp_media)}°C/Pioggia {rain_prob}%")
             if rain_prob > 25 or temp_media < 3: needs_auto = True
         
-        # Costruzione Messaggio
         veicolo = "AUTO 🚗" if needs_auto else "ZONTES 350 🛵"
         msg = f"{veicolo} (Algoritmo Meteo)<br><span style='font-size:0.8em; font-weight:normal'>{', '.join(details)}</span>"
         style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if needs_auto else "background: linear-gradient(90deg, #15803d, #22c55e);"
@@ -216,7 +213,10 @@ if ws:
         
         st.divider()
         num_visite = st.slider("Numero visite:", 1, 15, 8)
-        only_premium = st.toggle("💎 Solo Clienti PREMIUM")
+        
+        # --- QUI LA MODIFICA: value=True LO RENDE ATTIVO DI DEFAULT ---
+        only_premium = st.toggle("💎 Solo Clienti PREMIUM", value=True)
+        
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
@@ -232,7 +232,7 @@ if ws:
 
     st.markdown("### 🚀 Brightstar CRM Dashboard")
     
-    # --- METEO LAMMA + OPENMETEO ---
+    # --- METEO ---
     msg, style = agente_meteo_territoriale()
     col_meteo_1, col_meteo_2 = st.columns([3, 1])
     with col_meteo_1:
@@ -256,6 +256,8 @@ if ws:
         mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
         if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
+        
+        # Filtro Premium (Standard)
         if only_premium and c_prem:
              mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
@@ -293,7 +295,7 @@ if ws:
                         if arrival_real > limit: pool.remove(best); continue
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                         best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
-                        best['tasks_completed'] = [] # Inizializza lista task fatti
+                        best['tasks_completed'] = [] 
                         rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
                     else: break
                 
@@ -359,6 +361,7 @@ if ws:
             with st.expander("🔄 SOSTITUISCI / DATI CRM"):
                 st.markdown("🔄 **Sostituisci questo cliente:**")
                 clienti_nel_giro = [x[c_nom] for x in route]
+                
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
@@ -388,7 +391,7 @@ if ws:
                 dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}
                 st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
 
-            # --- CHECKLIST ATTIVITÀ CON PERSISTENZA ---
+            # --- CHECKLIST ATTIVITÀ ---
             if 'tasks_completed' not in p: p['tasks_completed'] = []
             
             if c_att and p.get(c_att):
@@ -397,28 +400,21 @@ if ws:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
-                        # Selezionato se presente nella lista salvata
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
                         
-                        # LOGICA AGGIORNAMENTO STATO
                         updated = False
                         if is_checked and task not in p['tasks_completed']:
-                            p['tasks_completed'].append(task)
-                            updated = True
+                            p['tasks_completed'].append(task); updated = True
                         elif not is_checked and task in p['tasks_completed']:
-                            p['tasks_completed'].remove(task)
-                            updated = True
+                            p['tasks_completed'].remove(task); updated = True
                         
-                        # SALVATAGGIO IMMEDIATO SE CAMBIA QUALCOSA
-                        if updated and ws_mem:
-                            salva_giro_su_foglio(ws_mem, st.session_state.master_route)
+                        if updated and ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
 
             tasks_done = p.get('tasks_completed', [])
             tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
             
             p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
-            # --- PULSANTI AZIONE ---
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
             with c2: 
