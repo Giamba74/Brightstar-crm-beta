@@ -33,8 +33,6 @@ st.markdown("""
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
     .swap-btn { border: 1px solid #475569; color: #94a3b8; border-radius: 5px; padding: 2px 8px; font-size: 0.8em; text-decoration: none; }
-    
-    /* LaMMA Style */
     .lamma-btn { background-color: #005cbb; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none; font-weight: bold; font-size: 0.9rem; display: inline-block; margin-top: 5px;}
     </style>
     """, unsafe_allow_html=True)
@@ -49,8 +47,9 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA PERSISTENTE ---
-def salva_giro_su_foglio(sh_memoria, rotta_data):
+# --- GESTIONE MEMORIA PERSISTENTE (AVANZATA) ---
+def salva_giro_solo_rotta(sh_memoria, rotta_data):
+    """Salva solo la rotta (Col A e B) senza toccare lo storico attività."""
     try:
         dati_export = copy.deepcopy(rotta_data)
         now_str = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
@@ -59,28 +58,94 @@ def salva_giro_su_foglio(sh_memoria, rotta_data):
                 p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
         
         json_dump = json.dumps(dati_export)
-        sh_memoria.clear()
-        sh_memoria.append_row(["DATA", "JSON_DATA"])
-        sh_memoria.append_row([now_str, json_dump])
+        # Aggiorna solo celle A2 e B2
+        sh_memoria.update_acell("A2", now_str)
+        sh_memoria.update_acell("B2", json_dump)
     except Exception as e:
-        print(f"Errore Salvataggio Memoria: {e}")
+        print(f"Errore Salvataggio Rotta: {e}")
 
 def carica_giro_da_foglio(sh_memoria):
     try:
-        data = sh_memoria.get_all_values()
-        if len(data) > 1:
-            saved_date = data[1][0]
+        # Legge solo A2 e B2
+        saved_date = sh_memoria.acell("A2").value
+        json_data = sh_memoria.acell("B2").value
+        
+        if saved_date and json_data:
             today = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
             if saved_date == today:
-                rotta = json.loads(data[1][1])
+                rotta = json.loads(json_data)
                 for p in rotta:
                     if p.get('arr'): 
                         p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
-                    if 'tasks_completed' not in p:
-                        p['tasks_completed'] = []
+                    if 'tasks_completed' not in p: p['tasks_completed'] = []
                 return rotta
     except: pass
     return None
+
+def resetta_solo_rotta(sh_memoria):
+    """Cancella solo la rotta (A2, B2) ma MANTIENE le attività (Col D, E)."""
+    try:
+        sh_memoria.batch_clear(["A2:B2"])
+    except: pass
+
+# --- GESTIONE ATTIVITÀ PERSISTENTI (DATABASE) ---
+def carica_storico_attivita(sh_memoria):
+    """Legge Colonne D (Cliente) e E (Attività JSON)"""
+    try:
+        raw = sh_memoria.get("D:E") # Legge colonne D ed E
+        db_tasks = {}
+        if not raw: return {}
+        for row in raw[1:]: # Salta header
+            if len(row) >= 2:
+                cliente = row[0]
+                tasks = json.loads(row[1])
+                db_tasks[cliente] = tasks
+        return db_tasks
+    except: return {}
+
+def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
+    """Aggiorna o Aggiunge le attività di un cliente nelle colonne D e E."""
+    try:
+        # Leggiamo tutto per trovare la riga giusta (metodo semplice ma sicuro)
+        records = sh_memoria.get_all_values()
+        # Cerca la riga del cliente nelle colonne D (indice 3)
+        row_idx = -1
+        for i, row in enumerate(records):
+            if len(row) > 3 and row[3] == cliente:
+                row_idx = i + 1 # gspread usa 1-based index
+                break
+        
+        json_tasks = json.dumps(tasks_list)
+        
+        if row_idx != -1:
+            # Aggiorna esistente (Colonna E è la 5)
+            sh_memoria.update_cell(row_idx, 5, json_tasks)
+        else:
+            # Aggiungi in fondo (scrivendo in D e E)
+            # Nota: append_row scrive dalla colonna A, dobbiamo usare update specifico o padding
+            # Metodo sicuro: accodare alla prima riga vuota delle colonne D/E
+            col_d_values = sh_memoria.col_values(4)
+            next_row = len(col_d_values) + 1
+            sh_memoria.update_cell(next_row, 4, cliente)
+            sh_memoria.update_cell(next_row, 5, json_tasks)
+            
+    except Exception as e:
+        print(f"Errore DB Attività: {e}")
+
+def pulisci_attivita_cliente(sh_memoria, cliente):
+    """Rimuove il cliente dal DB Attività quando è completato (FATTO)."""
+    try:
+        records = sh_memoria.get_all_values()
+        row_idx = -1
+        for i, row in enumerate(records):
+            if len(row) > 3 and row[3] == cliente:
+                row_idx = i + 1
+                break
+        if row_idx != -1:
+            # Cancelliamo celle D ed E per quella riga
+            sh_memoria.update_cell(row_idx, 4, "")
+            sh_memoria.update_cell(row_idx, 5, "")
+    except: pass
 
 # --- AGENTI INTELLIGENTI ---
 def agente_strategico(note_precedenti):
@@ -112,7 +177,6 @@ def agente_meteo_territoriale():
         veicolo = "AUTO 🚗" if needs_auto else "ZONTES 350 🛵"
         msg = f"{veicolo} (Algoritmo Meteo)<br><span style='font-size:0.8em; font-weight:normal'>{', '.join(details)}</span>"
         style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if needs_auto else "background: linear-gradient(90deg, #15803d, #22c55e);"
-        
         return msg, style
     except: return "METEO N/D", "background: #64748b;"
 
@@ -154,6 +218,10 @@ def connect_db():
         ws_main = sh.get_worksheet(0)
         ws_log = sh.worksheet("LOG_AI") if "LOG_AI" in [w.title for w in sh.worksheets()] else None
         ws_mem = sh.worksheet("MEMORIA_GIRO") if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()] else None
+        # Inizializza headers Memoria se vuoti
+        if ws_mem and not ws_mem.acell("D1").value:
+            ws_mem.update_acell("D1", "DB_CLIENTE")
+            ws_mem.update_acell("E1", "DB_TASKS")
         return ws_main, ws_log, ws_mem
     except: return None, None, None
 
@@ -198,25 +266,26 @@ if ws:
 
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
-    # --- AUTO-LOADING MEMORIA ---
+    # --- LOAD PERSISTENZA ---
+    # 1. Carica la rotta se esiste
     if 'master_route' not in st.session_state and ws_mem:
         rotta_salvata = carica_giro_da_foglio(ws_mem)
         if rotta_salvata:
             st.session_state.master_route = rotta_salvata
-            st.toast("📅 Giro ripristinato dalla memoria!", icon="💾")
+            st.toast("📅 Giro ripristinato.", icon="💾")
+    
+    # 2. Carica il DB delle attività per tutti
+    if 'db_tasks' not in st.session_state and ws_mem:
+        st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
     with st.sidebar:
         st.title("💼 CRM Filters")
-        
         st.markdown("### 📍 Punto di Partenza")
         indirizzo_start = st.text_input("Dove ti trovi ora?", value="Chianti, Sede")
         
         st.divider()
         num_visite = st.slider("Numero visite:", 1, 15, 8)
-        
-        # --- QUI LA MODIFICA: value=True LO RENDE ATTIVO DI DEFAULT ---
         only_premium = st.toggle("💎 Solo Clienti PREMIUM", value=True)
-        
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
@@ -225,20 +294,18 @@ if ws:
         sel_forced = st.multiselect("Clienti Prioritari:", all_clients_list)
         
         st.divider()
-        if st.button("🗑️ RESETTA MEMORIA", type="secondary"):
-             if ws_mem: ws_mem.clear(); ws_mem.append_row(["DATA", "JSON_DATA"])
+        if st.button("🗑️ RESETTA GIRO", type="secondary"):
+             # Resetta SOLO la rotta, non le attività storiche
+             if ws_mem: resetta_solo_rotta(ws_mem)
              if 'master_route' in st.session_state: del st.session_state.master_route
              st.rerun()
 
     st.markdown("### 🚀 Brightstar CRM Dashboard")
     
-    # --- METEO ---
     msg, style = agente_meteo_territoriale()
     col_meteo_1, col_meteo_2 = st.columns([3, 1])
-    with col_meteo_1:
-        st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
-    with col_meteo_2:
-        st.link_button("🌤️ LaMMA Toscana", "https://www.lamma.rete.toscana.it/", use_container_width=True)
+    with col_meteo_1: st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
+    with col_meteo_2: st.link_button("🌤️ LaMMA Toscana", "https://www.lamma.rete.toscana.it/", use_container_width=True)
 
     # --- CALCOLO NUOVO GIRO ---
     if st.button("CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
@@ -247,24 +314,17 @@ if ws:
         if indirizzo_start:
             with st.spinner(f"🔍 Cerco posizione: {indirizzo_start}..."):
                 loc_data = get_google_data([indirizzo_start])
-                if loc_data and loc_data['found']:
-                    start_coords = loc_data['coords']
-                    st.toast(f"📍 Partenza: {indirizzo_start}", icon="🗺️")
-                else:
-                    st.warning(f"⚠️ Indirizzo non trovato. Uso Sede.")
+                if loc_data and loc_data['found']: start_coords = loc_data['coords']
         
         mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
         if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
-        
-        # Filtro Premium (Standard)
-        if only_premium and c_prem:
-             mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
+        if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
         df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
         raw = df_final.to_dict('records')
         
-        if not raw: st.warning("Nessun cliente da visitare con questi filtri.")
+        if not raw: st.warning("Nessun cliente da visitare.")
         else:
             with st.spinner("⏳ Ottimizzazione percorso..."):
                 rotta = []
@@ -295,12 +355,15 @@ if ws:
                         if arrival_real > limit: pool.remove(best); continue
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                         best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
-                        best['tasks_completed'] = [] 
+                        
+                        # RECUPERO STORICO TASK SE ESISTE
+                        best['tasks_completed'] = st.session_state.db_tasks.get(best[c_nom], [])
+                        
                         rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
                     else: break
                 
                 st.session_state.master_route = rotta
-                if ws_mem: salva_giro_su_foglio(ws_mem, rotta)
+                if ws_mem: salva_giro_solo_rotta(ws_mem, rotta)
                 st.rerun()
 
     # --- VISUALIZZAZIONE GIRO ---
@@ -324,44 +387,30 @@ if ws:
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
             if valore_canvass and str(valore_canvass).strip():
-                canvass_html = f"""
-<div style="background: linear-gradient(90deg, #059669, #10b981); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-weight: bold; border: 1px solid #34d399;">
-📢 CANVASS: {valore_canvass}
-</div>
-"""
+                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
 
             # --- CARD HTML ---
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
 <div style="display:flex; align-items:center; flex-wrap: wrap;">
-{forced_html}
-{prem_html}
+{forced_html}{prem_html}
 <span class="client-name">{i+1}. {p[c_nom]}</span>
 </div>
 <div class="arrival-time">{ora_str}</div>
 </div>
 {canvass_html}
-<div class="strategy-box" style="{style_coach}">
-{msg_coach}
-</div>
-<div class="info-row">
-<span>📍 {p[c_ind]}, {p[c_com]}</span>
-<span class="real-traffic">🚗 Guida: {p['travel_time']} min</span>
-</div>
-<div class="info-row">
-<span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
-<span class="highlight">{tel_display}</span>
-</div>
+<div class="strategy-box" style="{style_coach}">{msg_coach}</div>
+<div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]}</span><span class="real-traffic">🚗 Guida: {p['travel_time']} min</span></div>
+<div class="info-row"><span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span><span class="highlight">{tel_display}</span></div>
 </div>
 """
             st.markdown(html_card, unsafe_allow_html=True)
 
-            # --- ESPANSIONE: SOSTITUZIONE + DATI ---
+            # --- SOSTITUZIONE ---
             with st.expander("🔄 SOSTITUISCI / DATI CRM"):
                 st.markdown("🔄 **Sostituisci questo cliente:**")
                 clienti_nel_giro = [x[c_nom] for x in route]
-                
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
@@ -377,21 +426,18 @@ if ws:
                             g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
                             if g_data_nuovo and g_data_nuovo['found']:
                                 dati_nuovo['g_data'] = g_data_nuovo
-                                dati_nuovo['arr'] = p['arr'] 
-                                dati_nuovo['duration'] = p['duration']
-                                dati_nuovo['travel_time'] = p['travel_time']
+                                dati_nuovo['arr'] = p['arr']; dati_nuovo['duration'] = p['duration']; dati_nuovo['travel_time'] = p['travel_time']
+                                # Recupera storico anche per il sostituto
+                                dati_nuovo['tasks_completed'] = st.session_state.db_tasks.get(dati_nuovo[c_nom], [])
                                 st.session_state.master_route[i] = dati_nuovo
-                                if ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
+                                if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
                                 st.rerun()
-                            else:
-                                st.error("Indirizzo sostituto non trovato.")
-                
+                            else: st.error("Indirizzo sostituto non trovato.")
                 st.divider()
-                st.markdown("**📂 Anagrafica Completa:**")
-                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}
-                st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
+                st.markdown("**📂 Anagrafica:**")
+                st.dataframe(pd.DataFrame([{k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}]).T, use_container_width=True)
 
-            # --- CHECKLIST ATTIVITÀ ---
+            # --- CHECKLIST PERSISTENTE ---
             if 'tasks_completed' not in p: p['tasks_completed'] = []
             
             if c_att and p.get(c_att):
@@ -408,7 +454,11 @@ if ws:
                         elif not is_checked and task in p['tasks_completed']:
                             p['tasks_completed'].remove(task); updated = True
                         
-                        if updated and ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
+                        if updated:
+                            # Aggiorna Sessione
+                            st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
+                            # Aggiorna Database (Foglio Google)
+                            if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
 
             tasks_done = p.get('tasks_completed', [])
             tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
@@ -426,14 +476,15 @@ if ws:
                 label_btn = "✅ FATTO" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI COMUNQUE"
                 
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
-                    if tasks_total > 0 and len(tasks_done) < tasks_total:
-                        st.toast("⚠️ Attenzione: Attività non completate!", icon="check")
-                    
+                    if tasks_total > 0 and len(tasks_done) < tasks_total: st.toast("⚠️ Attività non completate!", icon="check")
                     try:
                         ws.update_cell(ws.find(p[c_nom]).row, list(df.columns).index(c_vis)+1, "SI")
                         report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)} su {tasks_total}] " if tasks_total > 0 else "") + (f"[NOTE: {p['NOTE_SESSION']}]" if p['NOTE_SESSION'] else "")
                         log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
+                        # PULIZIA DB ATTIVITÀ (Visto che è finito)
+                        if ws_mem: pulisci_attivita_cliente(ws_mem, p[c_nom])
+                        
                         st.session_state.master_route.pop(i)
-                        if ws_mem: salva_giro_su_foglio(ws_mem, st.session_state.master_route)
+                        if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
                         st.rerun()
                     except: st.error("Errore Salvataggio")
