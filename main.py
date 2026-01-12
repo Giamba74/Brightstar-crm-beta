@@ -52,7 +52,8 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
-        now_str = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
+        # FORMATO EUROPEO: %d-%m-%Y
+        now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
         for p in dati_export:
             if isinstance(p.get('arr'), datetime): 
                 p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
@@ -68,7 +69,8 @@ def carica_giro_da_foglio(sh_memoria):
         saved_date = sh_memoria.acell("A2").value
         json_data = sh_memoria.acell("B2").value
         if saved_date and json_data:
-            today = datetime.now(TZ_ITALY).strftime("%Y-%m-%d")
+            # FORMATO EUROPEO ANCHE NEL CONTROLLO
+            today = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
             if saved_date == today:
                 rotta = json.loads(json_data)
                 for p in rotta:
@@ -214,8 +216,10 @@ def get_ai_duration(ws_log, cliente):
 
 def log_visit(ws_log, cliente, durata, note_extra=""):
     if ws_log:
+        if not ws_log.get_all_values(): ws_log.append_row(["CLIENTE", "DATA", "ORA", "DURATA_MIN", "NOTE_ATTIVITA"])
         now = datetime.now(TZ_ITALY)
-        ws_log.append_row([cliente, now.strftime("%Y-%m-%d"), now.strftime("%H:%M"), durata, note_extra])
+        # FORMATO EUROPEO ANCHE NEL LOG: %d-%m-%Y
+        ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
 # --- APP START ---
 ws, ws_ai, ws_mem = connect_db()
@@ -406,9 +410,7 @@ if ws:
             with c3:
                 # TASTO SALVA PARZIALE
                 if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
-                    # Salva stato sessione in memoria locale
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
-                    # Aggiorna DB Remoto
                     if ws_mem: 
                         aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                         salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
