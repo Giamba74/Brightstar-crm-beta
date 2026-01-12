@@ -12,7 +12,7 @@ import json
 import copy
 
 # --- 1. CONFIGURAZIONE & DESIGN ---
-st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💼", layout="wide")
+st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
 TZ_ITALY = pytz.timezone('Europe/Rome')
 
 st.markdown("""
@@ -29,9 +29,13 @@ st.markdown("""
     .real-traffic { color: #f59e0b; font-size: 0.8rem; font-style: italic; }
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
+    .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
     .swap-btn { border: 1px solid #475569; color: #94a3b8; border-radius: 5px; padding: 2px 8px; font-size: 0.8em; text-decoration: none; }
+    
+    /* LaMMA Style */
+    .lamma-btn { background-color: #005cbb; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none; font-weight: bold; font-size: 0.9rem; display: inline-block; margin-top: 5px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -72,6 +76,9 @@ def carica_giro_da_foglio(sh_memoria):
                 for p in rotta:
                     if p.get('arr'): 
                         p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                    # Assicuriamoci che tasks_completed sia una lista
+                    if 'tasks_completed' not in p:
+                        p['tasks_completed'] = []
                 return rotta
     except: pass
     return None
@@ -89,6 +96,7 @@ def agente_strategico(note_precedenti):
     return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #94a3b8;"
 
 def agente_meteo_territoriale():
+    # Per il calcolo "Auto vs Moto" usiamo OpenMeteo (dati numerici precisi)
     try:
         lats, lons = f"{COORDS['Chianti'][0]},{COORDS['Firenze'][0]},{COORDS['Arezzo'][0]}", f"{COORDS['Chianti'][1]},{COORDS['Firenze'][1]},{COORDS['Arezzo'][1]}"
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lats}&longitude={lons}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
@@ -102,8 +110,12 @@ def agente_meteo_territoriale():
             temp_media = sum(z['hourly']['temperature_2m'][9:18]) / 9
             details.append(f"{nome}: {int(temp_media)}°C/Pioggia {rain_prob}%")
             if rain_prob > 25 or temp_media < 3: needs_auto = True
-        msg = f"AUTO 🚗 ({', '.join(details)})" if needs_auto else f"ZONTES 350 🛵 ({', '.join(details)})"
+        
+        # Costruzione Messaggio
+        veicolo = "AUTO 🚗" if needs_auto else "ZONTES 350 🛵"
+        msg = f"{veicolo} (Algoritmo Meteo)<br><span style='font-size:0.8em; font-weight:normal'>{', '.join(details)}</span>"
         style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if needs_auto else "background: linear-gradient(90deg, #15803d, #22c55e);"
+        
         return msg, style
     except: return "METEO N/D", "background: #64748b;"
 
@@ -171,27 +183,22 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # 1. RILEVAMENTO COLONNE (MIGLIORATO)
+    # Rilevamento Colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     c_vis = next(c for c in df.columns if "VISITATO" in c)
     
-    # FIX: Cerca "TELEFONO" esatto per primo, poi cerca colonne che contengono "TEL" o "CELL"
-    if "TELEFONO" in df.columns:
-        c_tel = "TELEFONO"
-    else:
-        c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
-    
-    # Pulizia Dati Telefono (Forza Stringa)
-    if c_tel in df.columns:
-        df[c_tel] = df[c_tel].astype(str).replace('nan', '').replace('None', '')
+    if "TELEFONO" in df.columns: c_tel = "TELEFONO"
+    else: c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
+    if c_tel in df.columns: df[c_tel] = df[c_tel].astype(str).replace('nan', '').replace('None', '')
 
     c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
     c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
-    
+    c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
+
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
     # --- AUTO-LOADING MEMORIA ---
@@ -203,7 +210,13 @@ if ws:
 
     with st.sidebar:
         st.title("💼 CRM Filters")
+        
+        st.markdown("### 📍 Punto di Partenza")
+        indirizzo_start = st.text_input("Dove ti trovi ora?", value="Chianti, Sede")
+        
+        st.divider()
         num_visite = st.slider("Numero visite:", 1, 15, 8)
+        only_premium = st.toggle("💎 Solo Clienti PREMIUM")
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
@@ -218,25 +231,45 @@ if ws:
              st.rerun()
 
     st.markdown("### 🚀 Brightstar CRM Dashboard")
+    
+    # --- METEO LAMMA + OPENMETEO ---
     msg, style = agente_meteo_territoriale()
-    st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
+    col_meteo_1, col_meteo_2 = st.columns([3, 1])
+    with col_meteo_1:
+        st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
+    with col_meteo_2:
+        st.link_button("🌤️ LaMMA Toscana", "https://www.lamma.rete.toscana.it/", use_container_width=True)
 
     # --- CALCOLO NUOVO GIRO ---
     if st.button("CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
+        
+        start_coords = SEDE_COORDS
+        if indirizzo_start:
+            with st.spinner(f"🔍 Cerco posizione: {indirizzo_start}..."):
+                loc_data = get_google_data([indirizzo_start])
+                if loc_data and loc_data['found']:
+                    start_coords = loc_data['coords']
+                    st.toast(f"📍 Partenza: {indirizzo_start}", icon="🗺️")
+                else:
+                    st.warning(f"⚠️ Indirizzo non trovato. Uso Sede.")
+        
         mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
         if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
+        if only_premium and c_prem:
+             mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
+
         df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
         raw = df_final.to_dict('records')
         
-        if not raw: st.warning("Nessun cliente da visitare.")
+        if not raw: st.warning("Nessun cliente da visitare con questi filtri.")
         else:
             with st.spinner("⏳ Ottimizzazione percorso..."):
                 rotta = []
                 now = datetime.now(TZ_ITALY)
                 start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
                 limit = start_t.replace(hour=19, minute=30)
-                curr_t, curr_loc, pool = start_t, SEDE_COORDS, raw.copy()
+                curr_t, curr_loc, pool = start_t, start_coords, raw.copy()
 
                 while pool and curr_t < limit and len(rotta) < num_visite:
                     best = None
@@ -251,6 +284,7 @@ if ws:
                         score = dist_air
                         if p[c_nom] in sel_forced: score -= 100000 
                         if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5
+                        if c_prem and p.get(c_prem) == 'SI': score -= 2 
                         if score < best_score: best_score, best = score, p
                     
                     if best:
@@ -259,6 +293,7 @@ if ws:
                         if arrival_real > limit: pool.remove(best); continue
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                         best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
+                        best['tasks_completed'] = [] # Inizializza lista task fatti
                         rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
                     else: break
                 
@@ -273,7 +308,6 @@ if ws:
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
-            # FIX TELEFONO: Priorità a Excel, poi Google.
             tel_excel = str(p.get(c_tel, '')).strip()
             tel_google = p['g_data'].get('tel', '')
             tel_display = tel_excel if tel_excel and len(tel_excel) > 5 else tel_google
@@ -283,6 +317,7 @@ if ws:
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
             forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
+            prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
@@ -297,8 +332,9 @@ if ws:
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
-<div style="display:flex; align-items:center;">
+<div style="display:flex; align-items:center; flex-wrap: wrap;">
 {forced_html}
+{prem_html}
 <span class="client-name">{i+1}. {p[c_nom]}</span>
 </div>
 <div class="arrival-time">{ora_str}</div>
@@ -321,14 +357,16 @@ if ws:
 
             # --- ESPANSIONE: SOSTITUZIONE + DATI ---
             with st.expander("🔄 SOSTITUISCI / DATI CRM"):
-                
                 st.markdown("🔄 **Sostituisci questo cliente:**")
                 clienti_nel_giro = [x[c_nom] for x in route]
-                candidati_sostituzione = [c for c in all_clients_list if c not in clienti_nel_giro]
+                candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
+                if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
+                if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
+                candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
                 
                 col_swap_1, col_swap_2 = st.columns([3, 1])
                 with col_swap_1:
-                    nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
+                    nuovo_cliente_nome = st.selectbox(f"Scegli sostituto ({len(candidati_sostituzione)} trovati):", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
                 with col_swap_2:
                     if st.button("SCAMBIA", key=f"btn_swap_{i}"):
                         if nuovo_cliente_nome != "- Seleziona -":
@@ -347,20 +385,36 @@ if ws:
                 
                 st.divider()
                 st.markdown("**📂 Anagrafica Completa:**")
-                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION']}
+                dati_clean = {k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}
                 st.dataframe(pd.DataFrame([dati_clean]).T, use_container_width=True)
 
-            # --- CHECKLIST ATTIVITÀ ---
-            tasks_done = []
-            tasks_total = 0
+            # --- CHECKLIST ATTIVITÀ CON PERSISTENZA ---
+            if 'tasks_completed' not in p: p['tasks_completed'] = []
+            
             if c_att and p.get(c_att):
                 task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
-                tasks_total = len(task_list)
                 if task_list:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
-                        if st.checkbox(task, key=chk_key): tasks_done.append(task)
+                        # Selezionato se presente nella lista salvata
+                        is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
+                        
+                        # LOGICA AGGIORNAMENTO STATO
+                        updated = False
+                        if is_checked and task not in p['tasks_completed']:
+                            p['tasks_completed'].append(task)
+                            updated = True
+                        elif not is_checked and task in p['tasks_completed']:
+                            p['tasks_completed'].remove(task)
+                            updated = True
+                        
+                        # SALVATAGGIO IMMEDIATO SE CAMBIA QUALCOSA
+                        if updated and ws_mem:
+                            salva_giro_su_foglio(ws_mem, st.session_state.master_route)
+
+            tasks_done = p.get('tasks_completed', [])
+            tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
             
             p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
@@ -368,15 +422,12 @@ if ws:
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
             with c2: 
-                # FIX BUTTON VISIBILITY
-                if tel_display: 
-                    st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
-                else:
-                    st.button("🚫 NO TEL", disabled=True, use_container_width=True)
+                if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
+                else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
 
             with c3:
-                colore_btn = "primary" if len(tasks_done) == tasks_total else "secondary"
-                label_btn = "✅ FATTO" if len(tasks_done) == tasks_total else "⚠️ CHIUDI COMUNQUE"
+                colore_btn = "primary" if len(tasks_done) >= tasks_total else "secondary"
+                label_btn = "✅ FATTO" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI COMUNQUE"
                 
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
                     if tasks_total > 0 and len(tasks_done) < tasks_total:
