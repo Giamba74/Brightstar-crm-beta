@@ -85,22 +85,20 @@ def salva_giro_solo_rotta(sh_memoria, rotta_data):
         sh_memoria.update_acell("A2", now_str)
         time.sleep(0.5) 
         sh_memoria.update_acell("B2", json_dump)
-    except: pass # Silenzioso per non bloccare UI
+    except: pass 
 
 def carica_giro_da_foglio(sh_memoria):
     try:
-        saved_date = sh_memoria.acell("A2").value
+        # Legge la memoria senza preoccuparsi della data
         json_data = sh_memoria.acell("B2").value
         
-        if saved_date and json_data:
-            today_eu = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
-            # Carica solo se la data salvata è OGGI
-            if saved_date == today_eu:
-                rotta = json.loads(json_data)
-                for p in rotta:
-                    if p.get('arr'): p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
-                    if 'tasks_completed' not in p: p['tasks_completed'] = []
-                return rotta
+        if json_data:
+            # Abbiamo trovato dei dati! Li carichiamo sempre.
+            rotta = json.loads(json_data)
+            for p in rotta:
+                if p.get('arr'): p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                if 'tasks_completed' not in p: p['tasks_completed'] = []
+            return rotta
     except: pass
     return None
 
@@ -229,8 +227,6 @@ ws, ws_ai, ws_mem = connect_db()
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
-    
-    # Rilevamento Colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -248,13 +244,13 @@ if ws:
 
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
-    # --- 🔄 AUTO-LOADING ALL'AVVIO ---
+    # --- 🔄 AUTO-LOADING AGGRESSIVO ---
     if 'master_route' not in st.session_state and ws_mem:
-        with st.spinner("🔄 Ripristino sessione precedente..."):
+        with st.spinner("🔄 Ripristino memoria..."):
             rotta_salvata = carica_giro_da_foglio(ws_mem)
             if rotta_salvata:
                 st.session_state.master_route = rotta_salvata
-                st.success("🔄 GIRO RIPRISTINATO DALLA MEMORIA (DI OGGI)")
+                st.success("🔄 GIRO RECUPERATO DALLA MEMORIA (Permanente)")
     
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
@@ -317,115 +313,4 @@ if ws:
                             if not p['g_data']['found']: continue
                             dist_air = geodesic(curr_loc, p['g_data']['coords']).km
                             score = dist_air
-                            if p[c_nom] in sel_forced: score -= 100000 
-                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5
-                            if c_prem and p.get(c_prem) == 'SI': score -= 2 
-                            if score < best_score: best_score, best = score, p
-                        
-                        if best:
-                            real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
-                            arrival_real = curr_t + timedelta(minutes=real_mins)
-                            if arrival_real > limit: pool.remove(best); continue
-                            dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
-                            best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
-                            best['tasks_completed'] = st.session_state.db_tasks.get(best[c_nom], [])
-                            rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
-                        else: break
-                    st.session_state.master_route = rotta
-                    if ws_mem: salva_giro_solo_rotta(ws_mem, rotta)
-                    st.rerun()
-
-    if 'master_route' in st.session_state:
-        route = st.session_state.master_route
-        st.caption(f"🏁 Rientro previsto: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
-        
-        for i, p in enumerate(route):
-            ai_lbl = "AI" if p.get('learned') else "Std"
-            tel_excel = str(p.get(c_tel, '')).strip()
-            tel_google = p['g_data'].get('tel', '')
-            tel_display = tel_excel if tel_excel and len(tel_excel) > 5 else tel_google
-
-            ora_str = p['arr'].strftime('%H:%M')
-            note_old = p.get(c_note_sto, '') if c_note_sto else ''
-            msg_coach, style_coach = agente_strategico(note_old)
-            forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
-            prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
-            
-            canvass_html = ""
-            valore_canvass = p.get(c_canv, '') if c_canv else ''
-            if valore_canvass and str(valore_canvass).strip():
-                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
-
-            html_card = f"""
-<div class="client-card">
-<div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{prem_html}<span class="client-name">{i+1}. {p[c_nom]}</span></div><div class="arrival-time">{ora_str}</div></div>
-{canvass_html}
-<div class="strategy-box" style="{style_coach}">{msg_coach}</div>
-<div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]}</span><span class="real-traffic">🚗 Guida: {p['travel_time']} min</span></div>
-<div class="info-row"><span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span><span class="highlight">{tel_display}</span></div>
-</div>"""
-            st.markdown(html_card, unsafe_allow_html=True)
-
-            with st.expander("🔄 SOSTITUISCI / DATI CRM"):
-                col_swap_1, col_swap_2 = st.columns([3, 1])
-                clienti_nel_giro = [x[c_nom] for x in route]
-                candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
-                if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
-                if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
-                candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
-                
-                with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
-                with col_swap_2:
-                    if st.button("SCAMBIA", key=f"btn_swap_{i}"):
-                        if nuovo_cliente_nome != "- Seleziona -":
-                            dati_nuovo = df[df[c_nom] == nuovo_cliente_nome].to_dict('records')[0]
-                            g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
-                            if g_data_nuovo and g_data_nuovo['found']:
-                                dati_nuovo['g_data'] = g_data_nuovo; dati_nuovo['arr'] = p['arr']; dati_nuovo['duration'] = p['duration']; dati_nuovo['travel_time'] = p['travel_time']
-                                dati_nuovo['tasks_completed'] = st.session_state.db_tasks.get(dati_nuovo[c_nom], [])
-                                st.session_state.master_route[i] = dati_nuovo
-                                if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
-                                st.rerun()
-                            else: st.error("Indirizzo non trovato.")
-                st.dataframe(pd.DataFrame([{k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}]).T, use_container_width=True)
-
-            if 'tasks_completed' not in p: p['tasks_completed'] = []
-            if c_att and p.get(c_att):
-                task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
-                if task_list:
-                    st.markdown("**📋 Checklist:**")
-                    for t_idx, task in enumerate(task_list):
-                        chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
-                        is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
-                        
-                        if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
-                        elif not is_checked and task in p['tasks_completed']: p['tasks_completed'].remove(task)
-
-            tasks_done = p.get('tasks_completed', [])
-            tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
-            p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
-            
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
-            with c2: 
-                if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
-                else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
-            with c3:
-                if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
-                    st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
-                    if ws_mem: 
-                        aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
-                        salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
-            with c4:
-                colore_btn = "primary" if len(tasks_done) >= tasks_total else "secondary"
-                label_btn = "✅ CONCLUDI" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI"
-                if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
-                    try:
-                        ws.update_cell(ws.find(p[c_nom]).row, list(df.columns).index(c_vis)+1, "SI")
-                        report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)} su {tasks_total}] " if tasks_total > 0 else "") + (f"[NOTE: {p['NOTE_SESSION']}]" if p['NOTE_SESSION'] else "")
-                        log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
-                        if ws_mem: pulisci_attivita_cliente(ws_mem, p[c_nom])
-                        st.session_state.master_route.pop(i)
-                        if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
-                        st.rerun()
-                    except: st.error("Errore Salvataggio")
+                            if p[c_nom] in sel_forced: score -= 100
