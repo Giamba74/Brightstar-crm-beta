@@ -47,26 +47,55 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA ---
+@st.cache_resource
+def connect_db():
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        sh = client.open_by_key(ID_DEL_FOGLIO)
+        ws_main = sh.get_worksheet(0)
+        
+        ws_log = None
+        if "LOG_AI" in [w.title for w in sh.worksheets()]:
+             ws_log = sh.worksheet("LOG_AI")
+        
+        ws_mem = None
+        if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()]:
+             ws_mem = sh.worksheet("MEMORIA_GIRO")
+             # Inizializza Headers se vuoto
+             if not ws_mem.acell("A1").value:
+                 ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
+                 ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
+        
+        return ws_main, ws_log, ws_mem
+    except Exception as e:
+        st.error(f"Errore DB: {e}")
+        return None, None, None
+
+# --- GESTIONE MEMORIA PERSISTENTE ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
-        now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
+        now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y") # Formato Europeo
         for p in dati_export:
             if isinstance(p.get('arr'), datetime): p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
+        
         json_dump = json.dumps(dati_export)
         sh_memoria.update_acell("A2", now_str)
-        time.sleep(0.5) # Pausa anti-errore Google
+        time.sleep(0.5) 
         sh_memoria.update_acell("B2", json_dump)
-    except: st.warning("Salvataggio lento, riprova tra poco.")
+    except: pass # Silenzioso per non bloccare UI
 
 def carica_giro_da_foglio(sh_memoria):
     try:
         saved_date = sh_memoria.acell("A2").value
         json_data = sh_memoria.acell("B2").value
+        
         if saved_date and json_data:
-            today = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
-            if saved_date == today:
+            today_eu = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
+            # Carica solo se la data salvata è OGGI
+            if saved_date == today_eu:
                 rotta = json.loads(json_data)
                 for p in rotta:
                     if p.get('arr'): p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
@@ -104,8 +133,8 @@ def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
             next_row = len(col_d) + 1
             sh_memoria.update_cell(next_row, 4, cliente)
             sh_memoria.update_cell(next_row, 5, json_tasks)
-        st.toast(f"✅ Dati Salvati per {cliente}", icon="💾")
-    except: st.error("Errore server Google. Attendi 30 sec.")
+        st.toast(f"Dati Salvati: {cliente}", icon="💾")
+    except: st.error("Errore Salvataggio Parziale (Server Busy)")
 
 def pulisci_attivita_cliente(sh_memoria, cliente):
     try:
@@ -119,7 +148,7 @@ def pulisci_attivita_cliente(sh_memoria, cliente):
             sh_memoria.update_cell(row_idx, 5, "")
     except: pass
 
-# --- AI & CORE ---
+# --- CORE FUNCTIONS ---
 def agente_strategico(note_precedenti):
     if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "border-left-color: #64748b;"
     txt = str(note_precedenti).lower()
@@ -179,22 +208,6 @@ def get_google_data(query_list):
         except: continue
     return None
 
-@st.cache_resource
-def connect_db():
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-        client = gspread.authorize(creds)
-        sh = client.open_by_key(ID_DEL_FOGLIO)
-        ws_main = sh.get_worksheet(0)
-        ws_log = sh.worksheet("LOG_AI") if "LOG_AI" in [w.title for w in sh.worksheets()] else None
-        ws_mem = sh.worksheet("MEMORIA_GIRO") if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()] else None
-        if ws_mem and not ws_mem.acell("A1").value:
-            ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
-            ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
-        return ws_main, ws_log, ws_mem
-    except Exception as e: st.error(f"Errore DB: {e}"); return None, None, None
-
 def get_ai_duration(ws_log, cliente):
     if not ws_log: return 20, False
     try:
@@ -207,7 +220,6 @@ def get_ai_duration(ws_log, cliente):
 
 def log_visit(ws_log, cliente, durata, note_extra=""):
     if ws_log:
-        if not ws_log.get_all_values(): ws_log.append_row(["CLIENTE", "DATA", "ORA", "DURATA_MIN", "NOTE_ATTIVITA"])
         now = datetime.now(TZ_ITALY)
         ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
@@ -217,6 +229,8 @@ ws, ws_ai, ws_mem = connect_db()
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
+    
+    # Rilevamento Colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -234,19 +248,20 @@ if ws:
 
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
+    # --- 🔄 AUTO-LOADING ALL'AVVIO ---
     if 'master_route' not in st.session_state and ws_mem:
-        rotta_salvata = carica_giro_da_foglio(ws_mem)
-        if rotta_salvata:
-            st.session_state.master_route = rotta_salvata
-            st.toast("📅 Giro caricato.", icon="💾")
+        with st.spinner("🔄 Ripristino sessione precedente..."):
+            rotta_salvata = carica_giro_da_foglio(ws_mem)
+            if rotta_salvata:
+                st.session_state.master_route = rotta_salvata
+                st.success("🔄 GIRO RIPRISTINATO DALLA MEMORIA (DI OGGI)")
     
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
     with st.sidebar:
         st.title("💼 CRM Filters")
-        st.markdown("### 📍 Punto di Partenza")
-        indirizzo_start = st.text_input("Dove ti trovi ora?", value="Chianti, Sede")
+        indirizzo_start = st.text_input("📍 Partenza:", value="Chianti, Sede")
         st.divider()
         num_visite = st.slider("Numero visite:", 1, 15, 8)
         only_premium = st.toggle("💎 Solo Clienti PREMIUM", value=True)
@@ -266,10 +281,10 @@ if ws:
     msg, style = agente_meteo_territoriale()
     col_meteo_1, col_meteo_2 = st.columns([3, 1])
     with col_meteo_1: st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
-    with col_meteo_2: st.link_button("🌤️ LaMMA Toscana", "https://www.lamma.rete.toscana.it/", use_container_width=True)
+    with col_meteo_2: st.link_button("🌤️ LaMMA", "https://www.lamma.rete.toscana.it/", use_container_width=True)
 
     if st.button("CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
-        if not ws_mem: st.error("Errore Memoria!")
+        if not ws_mem: st.error("Errore: Manca foglio MEMORIA_GIRO!")
         else:
             start_coords = SEDE_COORDS
             if indirizzo_start:
@@ -381,7 +396,6 @@ if ws:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
-                        # QUI LA MODIFICA: SOLO MEMORIA LOCALE, NIENTE AGGIORNAMENTO GOOGLE
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
                         
                         if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
@@ -397,7 +411,6 @@ if ws:
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
                 else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
             with c3:
-                # TASTO SALVA PARZIALE (QUESTO SCRIVE SU GOOGLE)
                 if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                     if ws_mem: 
