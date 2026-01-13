@@ -10,6 +10,7 @@ from google.oauth2.service_account import Credentials
 import pytz
 import json
 import copy
+import time
 
 # --- 1. CONFIGURAZIONE & DESIGN ---
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
@@ -32,8 +33,6 @@ st.markdown("""
     .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
-    
-    /* Bottoni Personalizzati */
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
     </style>
     """, unsafe_allow_html=True)
@@ -48,28 +47,24 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA PERSISTENTE ---
+# --- GESTIONE MEMORIA ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
-        # FORMATO EUROPEO: %d-%m-%Y
         now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
         for p in dati_export:
-            if isinstance(p.get('arr'), datetime): 
-                p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
-        
+            if isinstance(p.get('arr'), datetime): p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
         json_dump = json.dumps(dati_export)
         sh_memoria.update_acell("A2", now_str)
+        time.sleep(0.5) # Pausa anti-errore Google
         sh_memoria.update_acell("B2", json_dump)
-    except Exception as e:
-        st.error(f"Errore Salvataggio: {e}")
+    except: st.warning("Salvataggio lento, riprova tra poco.")
 
 def carica_giro_da_foglio(sh_memoria):
     try:
         saved_date = sh_memoria.acell("A2").value
         json_data = sh_memoria.acell("B2").value
         if saved_date and json_data:
-            # FORMATO EUROPEO ANCHE NEL CONTROLLO
             today = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
             if saved_date == today:
                 rotta = json.loads(json_data)
@@ -81,9 +76,7 @@ def carica_giro_da_foglio(sh_memoria):
     return None
 
 def resetta_solo_rotta(sh_memoria):
-    try:
-        sh_memoria.batch_clear(["A2:B2"])
-        st.toast("Memoria Giro Cancellata", icon="🗑️")
+    try: sh_memoria.batch_clear(["A2:B2"])
     except: pass
 
 def carica_storico_attivita(sh_memoria):
@@ -92,8 +85,7 @@ def carica_storico_attivita(sh_memoria):
         db_tasks = {}
         if not raw: return {}
         for row in raw[1:]: 
-            if len(row) >= 2:
-                db_tasks[row[0]] = json.loads(row[1])
+            if len(row) >= 2: db_tasks[row[0]] = json.loads(row[1])
         return db_tasks
     except: return {}
 
@@ -106,15 +98,14 @@ def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
                 row_idx = i + 1; break
         
         json_tasks = json.dumps(tasks_list)
-        if row_idx != -1:
-            sh_memoria.update_cell(row_idx, 5, json_tasks)
+        if row_idx != -1: sh_memoria.update_cell(row_idx, 5, json_tasks)
         else:
             col_d = sh_memoria.col_values(4)
             next_row = len(col_d) + 1
             sh_memoria.update_cell(next_row, 4, cliente)
             sh_memoria.update_cell(next_row, 5, json_tasks)
-        st.toast(f"✅ Dati Salvati per {cliente} (Visita Parziale)", icon="💾")
-    except Exception as e: st.error(f"Errore DB Attività: {e}")
+        st.toast(f"✅ Dati Salvati per {cliente}", icon="💾")
+    except: st.error("Errore server Google. Attendi 30 sec.")
 
 def pulisci_attivita_cliente(sh_memoria, cliente):
     try:
@@ -218,7 +209,6 @@ def log_visit(ws_log, cliente, durata, note_extra=""):
     if ws_log:
         if not ws_log.get_all_values(): ws_log.append_row(["CLIENTE", "DATA", "ORA", "DURATA_MIN", "NOTE_ATTIVITA"])
         now = datetime.now(TZ_ITALY)
-        # FORMATO EUROPEO ANCHE NEL LOG: %d-%m-%Y
         ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
 # --- APP START ---
@@ -391,31 +381,29 @@ if ws:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
+                        # QUI LA MODIFICA: SOLO MEMORIA LOCALE, NIENTE AGGIORNAMENTO GOOGLE
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
                         
                         if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
                         elif not is_checked and task in p['tasks_completed']: p['tasks_completed'].remove(task)
-                        # Nota: Qui non salviamo su DB per velocità, salviamo col tasto PARZIALE
 
             tasks_done = p.get('tasks_completed', [])
             tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
             p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
-            # --- TASTI AZIONE ---
             c1, c2, c3, c4 = st.columns(4)
             with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
             with c2: 
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
                 else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
             with c3:
-                # TASTO SALVA PARZIALE
+                # TASTO SALVA PARZIALE (QUESTO SCRIVE SU GOOGLE)
                 if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                     if ws_mem: 
                         aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                         salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
             with c4:
-                # TASTO CONCLUDI
                 colore_btn = "primary" if len(tasks_done) >= tasks_total else "secondary"
                 label_btn = "✅ CONCLUDI" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI"
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
