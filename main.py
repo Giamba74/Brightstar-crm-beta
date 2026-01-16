@@ -294,12 +294,16 @@ else:
                             
                             score = dist_air
                             
-                            # PRIORITA' AGGIORNATE:
-                            # 1. VIP (Forzature)
+                            # PRIORITA' AGGIORNATE (Logica INVERSA):
+                            # 1. VIP (Forzature) - Sempre primi
                             if p[c_nom] in sel_forced: score -= 100000 
                             
-                            # 2. CLIENTI CON ATTIVITA' DA FARE (Boost Enorme)
-                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 50000
+                            # 2. CLIENTI SENZA ATTIVITÀ (Priorità richiesta dall'utente)
+                            # Se la cella attività è vuota/bianca -> Priorità MAX (-50000)
+                            # Se c'è scritto qualcosa -> Nessuna priorità (finiscono in fondo)
+                            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
+                            if not has_tasks:
+                                 score -= 50000
                             
                             # 3. Premium
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
@@ -338,7 +342,7 @@ else:
             
             # Badge Visivo per le Attività
             has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-            task_badge_html = "<span class='task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
+            task_badge_html = "<span class='task-badge'>📋 PREVISTO</span>" if has_tasks else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
