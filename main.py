@@ -12,7 +12,7 @@ import json
 import copy
 import time
 
-# --- 1. CONFIGURAZIONE & DESIGN ---
+# --- CONFIGURAZIONE ---
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
 TZ_ITALY = pytz.timezone('Europe/Rome')
 
@@ -30,13 +30,12 @@ st.markdown("""
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
     .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
+    .task-badge { font-size: 0.8rem; color: #34d399; font-weight: bold; border: 1px solid #34d399; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
-    .streamlit-expanderHeader { background-color: rgba(255,255,255,0.05) !important; color: white !important; border-radius: 8px; }
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- DATI ---
 COORDS = { "Chianti": (43.661888, 11.305728), "Firenze": (43.7696, 11.2558), "Arezzo": (43.4631, 11.8781) }
 SEDE_COORDS = COORDS["Chianti"]
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
@@ -54,23 +53,20 @@ def connect_db():
         client = gspread.authorize(creds)
         sh = client.open_by_key(ID_DEL_FOGLIO)
         ws_main = sh.get_worksheet(0)
-        
-        ws_log = None
-        if "LOG_AI" in [w.title for w in sh.worksheets()]:
-             ws_log = sh.worksheet("LOG_AI")
+        ws_log = sh.worksheet("LOG_AI") if "LOG_AI" in [w.title for w in sh.worksheets()] else None
         
         ws_mem = None
         if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()]:
              ws_mem = sh.worksheet("MEMORIA_GIRO")
+             # Inizializza Headers se vuoto
              if not ws_mem.acell("A1").value:
                  ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
                  ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
         
         return ws_main, ws_log, ws_mem
-    except Exception as e:
-        return None, None, None
+    except: return None, None, None
 
-# --- GESTIONE MEMORIA PERSISTENTE ---
+# --- SALVATAGGIO ROBUSTO ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
@@ -80,8 +76,9 @@ def salva_giro_solo_rotta(sh_memoria, rotta_data):
         
         json_dump = json.dumps(dati_export)
         sh_memoria.update_acell("A2", now_str)
-        time.sleep(0.5) 
+        time.sleep(0.5)
         sh_memoria.update_acell("B2", json_dump)
+        sh_memoria.update_acell("A2", now_str) 
     except: pass 
 
 def carica_giro_da_foglio(sh_memoria):
@@ -93,10 +90,8 @@ def carica_giro_da_foglio(sh_memoria):
                 if p.get('arr') and isinstance(p['arr'], str):
                     try: p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
                     except: p['arr'] = datetime.now(TZ_ITALY)
-                
                 if 'tasks_completed' not in p: p['tasks_completed'] = []
                 if 'g_data' not in p: p['g_data'] = {'coords': None, 'found': False, 'tel': ''}
-                
             return rotta
     except: pass
     return None
@@ -131,7 +126,7 @@ def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
             sh_memoria.update_cell(next_row, 4, cliente)
             sh_memoria.update_cell(next_row, 5, json_tasks)
         st.toast(f"Dati Salvati: {cliente}", icon="💾")
-    except: st.error("Errore Salvataggio Parziale (Server Busy)")
+    except: st.error("Errore Salvataggio Parziale")
 
 def pulisci_attivita_cliente(sh_memoria, cliente):
     try:
@@ -145,25 +140,11 @@ def pulisci_attivita_cliente(sh_memoria, cliente):
             sh_memoria.update_cell(row_idx, 5, "")
     except: pass
 
-# --- CORE FUNCTIONS ---
-def agente_strategico(note_precedenti):
-    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente.", "border-left-color: #64748b;"
-    txt = str(note_precedenti).lower()
-    if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo']):
-        return "🛡️ COACH: Cliente a rischio.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
-    if any(x in txt for x in ['prezzo', 'costoso', 'sconto']):
-        return "💎 COACH: Difendi il valore.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
-    if any(x in txt for x in ['interessato', 'preventivo']):
-        return "🎯 COACH: È caldo!", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
-    return f"ℹ️ MEMO: {note_precedenti[:50]}...", "border-left-color: #94a3b8;"
-
 def get_real_travel_time(origin_coords, dest_coords):
-    if not API_KEY or not origin_coords or not dest_coords: 
-        # Fallback se non ci sono coordinate
-        return 20 
+    if not API_KEY or not origin_coords or not dest_coords: return 20 
     try:
         url = f"https://maps.googleapis.com/maps/api/distancematrix/json?origins={origin_coords[0]},{origin_coords[1]}&destinations={dest_coords[0]},{dest_coords[1]}&departure_time=now&mode=driving&key={API_KEY}"
-        res = requests.get(url, timeout=3).json() # Timeout aumentato
+        res = requests.get(url, timeout=3).json() 
         if res['status'] == 'OK' and res['rows'][0]['elements'][0]['status'] == 'OK':
             seconds = res['rows'][0]['elements'][0]['duration_in_traffic']['value']
             return int(seconds / 60)
@@ -175,7 +156,6 @@ def get_real_travel_time(origin_coords, dest_coords):
 
 def get_google_data(query_list):
     if not API_KEY: return None
-    # Pausa strategica anti-blocco
     time.sleep(0.1) 
     for q in query_list:
         try:
@@ -203,10 +183,23 @@ def log_visit(ws_log, cliente, durata, note_extra=""):
         now = datetime.now(TZ_ITALY)
         ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
-# --- APP START ---
-ws, ws_ai, ws_mem = connect_db()
+def agente_strategico(note_precedenti):
+    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente.", "border-left-color: #64748b;"
+    txt = str(note_precedenti).lower()
+    if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo']):
+        return "🛡️ COACH: Cliente a rischio.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
+    if any(x in txt for x in ['prezzo', 'costoso', 'sconto']):
+        return "💎 COACH: Difendi il valore.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
+    if any(x in txt for x in ['interessato', 'preventivo']):
+        return "🎯 COACH: È caldo!", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
+    return f"ℹ️ MEMO: {note_precedenti[:50]}...", "border-left-color: #94a3b8;"
 
-if ws:
+# --- APP START ---
+try: ws, ws_ai, ws_mem = connect_db()
+except: ws, ws_ai, ws_mem = None, None, None
+
+if ws is None: st.error("❌ Errore Connessione DB.")
+else:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
@@ -218,21 +211,17 @@ if ws:
     if "TELEFONO" in df.columns: c_tel = "TELEFONO"
     else: c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
     if c_tel in df.columns: df[c_tel] = df[c_tel].astype(str).replace('nan', '').replace('None', '')
-
     c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
     c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
-
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
-    # --- 🔄 AUTO-LOADING ---
     if 'master_route' not in st.session_state and ws_mem:
-        with st.spinner("🔄 Ripristino sessione..."):
-            rotta_salvata = carica_giro_da_foglio(ws_mem)
-            if rotta_salvata:
-                st.session_state.master_route = rotta_salvata
-                st.success("🔄 GIRO RECUPERATO")
+        rotta_salvata = carica_giro_da_foglio(ws_mem)
+        if rotta_salvata:
+            st.session_state.master_route = rotta_salvata
+            st.toast("🔄 Giro Ripristinato", icon="💾")
     
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
@@ -276,28 +265,20 @@ if ws:
             
             if not raw: st.warning("Nessun cliente trovato.")
             else:
-                # --- CALCOLO CON BARRA DI PROGRESSO E TOLLERANZA ERRORI ---
                 prog_bar = st.progress(0, text="Ricerca Indirizzi...")
                 pool_pronta = []
                 total = len(raw)
                 
                 for i, p in enumerate(raw):
                     prog_bar.progress((i + 1) / total, text=f"🔍 Analisi: {p[c_nom]}")
-                    
                     if 'g_data' not in p:
-                        # Cerca indirizzo
                         res = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                        if res and res['found']:
-                             p['g_data'] = res
-                        else:
-                             # FALLBACK: Se Google fallisce, usa coordinate fittizie (Sede) per NON perdere il cliente
-                             p['g_data'] = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
-                    
+                        if res and res['found']: p['g_data'] = res
+                        else: p['g_data'] = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
                     pool_pronta.append(p)
-                
                 prog_bar.empty()
 
-                with st.spinner("⏳ Ordinamento percorso..."):
+                with st.spinner("⏳ Ordinamento..."):
                     rotta = []
                     now = datetime.now(TZ_ITALY)
                     start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
@@ -307,16 +288,22 @@ if ws:
                     while pool and curr_t < limit and len(rotta) < num_visite:
                         best = None; best_score = float('inf')
                         for p in pool:
-                            # Calcola distanza (Se GPS non trovato, distanza sarà zero o fittizia ma non blocca)
                             c_target = p['g_data']['coords'] if p['g_data']['coords'] else curr_loc
-                            
                             try: dist_air = geodesic(curr_loc, c_target).km
-                            except: dist_air = 9999 # Penality se errore
+                            except: dist_air = 9999 
                             
                             score = dist_air
+                            
+                            # PRIORITA' AGGIORNATE:
+                            # 1. VIP (Forzature)
                             if p[c_nom] in sel_forced: score -= 100000 
-                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5
-                            if c_prem and p.get(c_prem) == 'SI': score -= 2 
+                            
+                            # 2. CLIENTI CON ATTIVITA' DA FARE (Boost Enorme)
+                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 50000
+                            
+                            # 3. Premium
+                            if c_prem and p.get(c_prem) == 'SI': score -= 2000 
+                            
                             if score < best_score: best_score, best = score, p
                         
                         if best:
@@ -335,7 +322,7 @@ if ws:
 
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
-        st.caption(f"🏁 Rientro previsto: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
+        st.caption(f"🏁 Rientro: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
@@ -346,22 +333,24 @@ if ws:
             ora_str = p['arr'].strftime('%H:%M')
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
-            forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>" if p[c_nom] in sel_forced else ""
+            forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
+            # Badge Visivo per le Attività
+            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
+            task_badge_html = "<span class='task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
+
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
             if valore_canvass and str(valore_canvass).strip():
                 canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
 
-            # ALERT VISIVO SE MAPPA NON TROVATA
             map_status = ""
-            if not p['g_data']['found']:
-                map_status = "<div style='color: #ef4444; font-weight:bold; margin-top:5px;'>⚠️ INDIRIZZO NON TROVATO (Coordinate stimate)</div>"
+            if not p['g_data']['found']: map_status = "<div style='color: #ef4444; font-weight:bold; margin-top:5px;'>⚠️ INDIRIZZO NON TROVATO</div>"
 
             html_card = f"""
 <div class="client-card">
-<div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{prem_html}<span class="client-name">{i+1}. {p[c_nom]}</span></div><div class="arrival-time">{ora_str}</div></div>
+<div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{task_badge_html}{prem_html}<span class="client-name">{i+1}. {p[c_nom]}</span></div><div class="arrival-time">{ora_str}</div></div>
 {canvass_html}
 <div class="strategy-box" style="{style_coach}">{msg_coach}</div>
 {map_status}
@@ -377,23 +366,18 @@ if ws:
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
                 candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
-                
                 with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
                 with col_swap_2:
                     if st.button("SCAMBIA", key=f"btn_swap_{i}"):
                         if nuovo_cliente_nome != "- Seleziona -":
                             dati_nuovo = df[df[c_nom] == nuovo_cliente_nome].to_dict('records')[0]
                             g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
-                            # Anche qui logica "safe": se non trova, usa coordinate fittizie
-                            if not g_data_nuovo or not g_data_nuovo['found']:
-                                g_data_nuovo = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
-                            
+                            if not g_data_nuovo or not g_data_nuovo['found']: g_data_nuovo = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
                             dati_nuovo['g_data'] = g_data_nuovo; dati_nuovo['arr'] = p['arr']; dati_nuovo['duration'] = p['duration']; dati_nuovo['travel_time'] = p['travel_time']
                             dati_nuovo['tasks_completed'] = st.session_state.db_tasks.get(dati_nuovo[c_nom], [])
                             st.session_state.master_route[i] = dati_nuovo
                             if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
                             st.rerun()
-
                 st.dataframe(pd.DataFrame([{k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}]).T, use_container_width=True)
 
             if 'tasks_completed' not in p: p['tasks_completed'] = []
@@ -404,7 +388,6 @@ if ws:
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
-                        
                         if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
                         elif not is_checked and task in p['tasks_completed']: p['tasks_completed'].remove(task)
 
@@ -414,11 +397,8 @@ if ws:
             
             c1, c2, c3, c4 = st.columns(4)
             with c1: 
-                # Naviga solo se coordinate valide
-                if p['g_data']['found']:
-                    st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
-                else:
-                    st.button("🚫 NO GPS", disabled=True, use_container_width=True)
+                if p['g_data']['found']: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
+                else: st.button("🚫 NO GPS", disabled=True, use_container_width=True)
             with c2: 
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
                 else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
