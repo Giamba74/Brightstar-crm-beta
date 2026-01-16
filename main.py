@@ -30,7 +30,7 @@ st.markdown("""
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
     .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
-    .task-badge { font-size: 0.8rem; color: #64748b; font-weight: bold; border: 1px solid #64748b; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
+    .task-badge { font-size: 0.8rem; color: #f43f5e; font-weight: bold; border: 1px solid #f43f5e; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
     </style>
@@ -223,6 +223,7 @@ else:
             st.session_state.master_route = rotta_salvata
             st.toast("🔄 Giro Ripristinato", icon="💾")
     
+    # IMPORTANTE: Carica SEMPRE lo storico da MEMORIA_GIRO all'avvio
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
@@ -294,16 +295,18 @@ else:
                             
                             score = dist_air
                             
-                            # 1. VIP (Forzature) - Priority MAX (Vincono sempre)
-                            if p[c_nom] in sel_forced: 
-                                score -= 100000000 
+                            # 1. VIP (Forzature) - Priority MAX
+                            if p[c_nom] in sel_forced: score -= 100000000 
                             
-                            # 2. CLIENTI "PULITI" (Senza Attività) - Priority HIGH
-                            # Se la cella attività è VUOTA -> Bonus enorme (-50.000.000)
-                            # Se la cella è PIENA -> Nessun bonus (finiscono in coda)
-                            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-                            if not has_tasks:
-                                 score -= 50000000
+                            # 2. LOGICA CD (DA MEMORIA_GIRO)
+                            # Cerco se nel foglio MEMORIA_GIRO (colonna E) c'è "CD"
+                            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
+                            storico_str = str(storico_tasks).upper()
+                            
+                            # Se "CD" NON c'è scritto -> Priorità MASSIMA (Passa avanti a tutti gli altri)
+                            if "CD" not in storico_str:
+                                score -= 50000000 
+                            # Se "CD" C'È scritto -> Nessun bonus, rimane indietro.
                             
                             # 3. Premium
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
@@ -340,9 +343,14 @@ else:
             forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            # Badge Visivo per le Attività (Solo informativo, ora sono in fondo)
-            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-            task_badge_html = "<span class='task-badge'>⚠️ Coda</span>" if has_tasks else ""
+            # Badge Visivo basato su MEMORIA_GIRO
+            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
+            storico_str = str(storico_tasks).upper()
+            has_cd = "CD" in storico_str
+            
+            task_badge_html = ""
+            if has_cd:
+                task_badge_html = "<span class='task-badge'>⚠️ CD GIÀ FATTO</span>"
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
