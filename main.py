@@ -30,7 +30,7 @@ st.markdown("""
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
     .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
-    .task-badge { font-size: 0.8rem; color: #34d399; font-weight: bold; border: 1px solid #34d399; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
+    .task-badge { font-size: 0.8rem; color: #64748b; font-weight: bold; border: 1px solid #64748b; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
     </style>
@@ -294,16 +294,16 @@ else:
                             
                             score = dist_air
                             
-                            # PRIORITA' AGGIORNATE (Logica INVERSA):
-                            # 1. VIP (Forzature) - Sempre primi
-                            if p[c_nom] in sel_forced: score -= 100000 
+                            # 1. VIP (Forzature) - Priority MAX (Vincono sempre)
+                            if p[c_nom] in sel_forced: 
+                                score -= 100000000 
                             
-                            # 2. CLIENTI SENZA ATTIVITÀ (Priorità richiesta dall'utente)
-                            # Se la cella attività è vuota/bianca -> Priorità MAX (-50000)
-                            # Se c'è scritto qualcosa -> Nessuna priorità (finiscono in fondo)
+                            # 2. CLIENTI "PULITI" (Senza Attività) - Priority HIGH
+                            # Se la cella attività è VUOTA -> Bonus enorme (-50.000.000)
+                            # Se la cella è PIENA -> Nessun bonus (finiscono in coda)
                             has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
                             if not has_tasks:
-                                 score -= 50000
+                                 score -= 50000000
                             
                             # 3. Premium
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
@@ -340,9 +340,9 @@ else:
             forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            # Badge Visivo per le Attività
+            # Badge Visivo per le Attività (Solo informativo, ora sono in fondo)
             has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-            task_badge_html = "<span class='task-badge'>📋 PREVISTO</span>" if has_tasks else ""
+            task_badge_html = "<span class='task-badge'>⚠️ Coda</span>" if has_tasks else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
